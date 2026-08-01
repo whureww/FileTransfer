@@ -394,7 +394,15 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
             return CANCELED;
         }
         if (frame_type == FRAME_DONE) {
-            // 数据传输完毕
+            // 安全校验: 确保接收到的字节数与声明的文件大小一致 (防不完整文件)
+            if (received != hdr.file_size) {
+                report(cb, 0, 0, "[错误] 文件不完整: 声明 " + std::to_string(hdr.file_size) +
+                       " 字节, 实际接收 " + std::to_string(received) + " 字节");
+                out.close();
+                std::remove(out_path.c_str());
+                close_socket(sock);
+                return ERR_RECV_DATA;
+            }
             done = true;
             break;
         }

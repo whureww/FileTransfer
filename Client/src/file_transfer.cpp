@@ -380,6 +380,16 @@ int recv_file(unsigned short port, const std::string& output_dir,
             return CANCELED;
         }
         if (frame_type == FRAME_DONE) {
+            // 安全校验: 确保接收到的字节数与声明的文件大小一致 (防不完整文件)
+            if (received != hdr.file_size) {
+                report(cb, 0, 0, "[错误] 文件不完整: 声明 " + std::to_string(hdr.file_size) +
+                       " 字节, 实际接收 " + std::to_string(received) + " 字节");
+                out.close();
+                std::remove(out_path.c_str());
+                close_socket(conn);
+                close_socket(listen_sock);
+                return ERR_RECV_DATA;
+            }
             done = true;
             break;
         }

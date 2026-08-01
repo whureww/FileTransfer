@@ -83,12 +83,17 @@ struct Room {
 struct RelayState {
     std::mutex mtx;
     std::map<std::string, Room*> rooms;
-    std::mt19937 rng{std::random_device{}()};
+    // 使用 64-bit Mersenne Twister, 额外维护一个 random_device 做熵注入
+    std::mt19937_64 rng{[](){
+        std::random_device rd;
+        std::seed_seq seq{rd(), rd(), rd(), rd(), rd(), rd(), rd(), rd()};
+        return std::mt19937_64(seq);
+    }()};
     std::atomic<int> active_connections{0};
     // JOIN 速率限制: 记录每个 IP 的失败次数和首次失败时间
     std::mutex rate_mtx;
     std::map<std::string, std::pair<int, std::chrono::steady_clock::time_point>> join_failures;
-    // 工作线程列表 (用于优雅退出时 join)
+    // 工作线程列表 (用于优雅退出时 join + 清理已完成线程防泄漏)
     std::mutex threads_mtx;
     std::vector<std::thread> worker_threads;
     std::atomic<bool> shutting_down{false};
@@ -147,10 +152,14 @@ std::string gen_room_code(RelayState& st) {
     static const char charset[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     static const int charset_size = static_cast<int>(sizeof(charset) - 1);
     std::lock_guard<std::mutex> lk(st.mtx);
+    // 每次生成房间码时额外注入 random_device 熵, 降低可预测性
+    std::random_device rd;
+    st.rng.seed(st.rng() ^ (static_cast<uint64_t>(rd()) << 32) ^ rd());
+    std::uniform_int_distribution<int> dist(0, charset_size - 1);
     while (true) {
         char buf[ROOM_CODE_LEN + 1] = {0};
         for (int i = 0; i < ROOM_CODE_LEN; ++i) {
-            buf[i] = charset[st.rng() % charset_size];
+            buf[i] = charset[dist(st.rng)];
         }
         std::string code(buf);
         if (st.rooms.find(code) == st.rooms.end()) return code;
@@ -459,7 +468,67 @@ int run_relay_server(unsigned short port) {
               std::to_string(RELAY_MAX_DATA / (1024*1024)) + " MB");
 
     RelayState st;
+    auto last_cleanup = std::chrono::steady_clock::now();
     while (g_relay_running.load()) {
+        // 每 10 秒清理一次: 已结束的工作线程 + 过期的 JOIN 失败记录
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - last_cleanup).count() >= 10) {
+            last_cleanup = now;
+            // 1. 清理已完成的工作线程 (join 并移除, 防止线程对象无限堆积)
+            {
+                std::lock_guard<std::mutex> lk(st.threads_mtx);
+                std::vector<std::thread> still_alive;
+                for (auto& t : st.worker_threads) {
+                    if (t.joinable()) {
+                        // 尝试非阻塞判断: Windows 下用 WaitForSingleObject, 其他下用 detach+future 判断较麻烦,
+                        // 但这里连接一般数秒内完成, 直接尝试 join(0) 通过 native_handle 可能复杂,
+                        // 简化策略: 对已结束的直接 join, 未结束的放回 still_alive (try_join_for)
+#ifdef _WIN32
+                        DWORD r = ::WaitForSingleObject(t.native_handle(), 0);
+                        if (r == WAIT_OBJECT_0) {
+                            t.join();  // 线程已结束, 安全 join
+                        } else {
+                            still_alive.push_back(std::move(t));
+                        }
+#else
+                        // POSIX: pthread_tryjoin_np 不可移植, 简化处理: 每隔 10 秒全量检查是否
+                        // 线程自然结束, joinable 就 join 一次, 如果未结束会阻塞极短时间.
+                        // 这里为了简单可靠, 不做区分, 全部放回, 由服务器关闭时统一 join.
+                        still_alive.push_back(std::move(t));
+#endif
+                    }
+                }
+                st.worker_threads.swap(still_alive);
+            }
+            // 2. 清理过期的 JOIN 速率限制记录 (防止 IP 表无限增长)
+            {
+                std::lock_guard<std::mutex> lk(st.rate_mtx);
+                auto it = st.join_failures.begin();
+                while (it != st.join_failures.end()) {
+                    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                        now - it->second.second).count();
+                    if (elapsed >= 120) {  // 超过 2 分钟的记录删除
+                        it = st.join_failures.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+            // 3. 清理已死的房间 (正常情况下 relay_forward_loop 结束就会删, 这里兜底)
+            {
+                std::lock_guard<std::mutex> lk(st.mtx);
+                auto it = st.rooms.begin();
+                while (it != st.rooms.end()) {
+                    if (it->second->dead.load() && !it->second->paired.load()) {
+                        delete it->second;
+                        it = st.rooms.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+        }
+
         // 使用 select 设置 accept 超时, 以便定期检查 g_running 标志
         fd_set rfds;
         FD_ZERO(&rfds);

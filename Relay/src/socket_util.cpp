@@ -166,6 +166,15 @@ std::string sanitize_filename(const std::string& name) {
         safe_name.push_back(c);
     }
     if (safe_name.empty()) safe_name = "received_file";
+    // 防止目录穿越 (安全关键: "." / ".." / 全点号文件名)
+    bool all_dots = !safe_name.empty() &&
+        std::all_of(safe_name.begin(), safe_name.end(), [](char c){ return c == '.'; });
+    if (all_dots) safe_name = "received_file";
+    // Windows 文件名不能以空格或句点结尾 (会被自动剥离, 但防止歧义)
+    while (!safe_name.empty() && (safe_name.back() == '.' || safe_name.back() == ' ')) {
+        safe_name.pop_back();
+    }
+    if (safe_name.empty()) safe_name = "received_file";
     // 防止 Windows 保留设备名 (CON, PRN, NUL, AUX, COM1-9, LPT1-9, CONIN$, CONOUT$)
     std::string upper = safe_name;
     for (char& c : upper) { if (c >= 'a' && c <= 'z') c -= 32; }
