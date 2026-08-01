@@ -40,6 +40,8 @@ using ft::detail::recv_line;
 using ft::detail::send_line;
 using ft::detail::sanitize_filename;
 using ft::detail::unique_filepath;
+using ft::write_frame;
+using ft::read_frame;
 
 namespace ft {
 
@@ -182,8 +184,9 @@ int relay_send_file(const std::string& relay_host, unsigned short relay_port,
         return ERR_SEND_HDR;
     }
 
-    // 6. 流式发送文件内容
+    // 6. 流式发送文件内容 (使用二进制帧协议, 支持取消通知)
     std::vector<char> buf(BUFFER_SIZE);
+    std::vector<char> frame_data;
     uint64_t sent = 0;
     while (sent < file_size) {
         std::streamsize want = static_cast<std::streamsize>(
@@ -195,17 +198,32 @@ int relay_send_file(const std::string& relay_host, unsigned short relay_port,
             close_socket(sock);
             return ERR_READ_FILE;
         }
-        if (!send_all(sock, buf.data(), static_cast<std::size_t>(got))) {
-            report(cb, 0, 0, "[错误] 发送数据失败, errno=" + std::to_string(sock_errno()));
+        // 检查用户取消 (在发送数据帧之前)
+        if (!report(cb, sent, file_size, "")) {
+            report(cb, 0, 0, "[信息] 用户已取消发送, 通知接收方...");
+            write_frame(sock, FRAME_CANCEL, nullptr, 0);
+            close_socket(sock);
+            return CANCELED;
+        }
+        // 发送 DATA 帧
+        if (!write_frame(sock, FRAME_DATA, buf.data(), static_cast<uint32_t>(got))) {
+            report(cb, 0, 0, "[错误] 发送数据失败 (接收方可能已取消), errno=" + std::to_string(sock_errno()));
             close_socket(sock);
             return ERR_SEND_DATA;
         }
         sent += static_cast<uint64_t>(got);
         if (!report(cb, sent, file_size, "")) {
-            report(cb, 0, 0, "[信息] 用户已取消发送");
+            report(cb, 0, 0, "[信息] 用户已取消发送, 通知接收方...");
+            write_frame(sock, FRAME_CANCEL, nullptr, 0);
             close_socket(sock);
             return CANCELED;
         }
+    }
+    // 发送 DONE 帧, 通知接收方数据已全部发送完毕
+    if (!write_frame(sock, FRAME_DONE, nullptr, 0)) {
+        report(cb, 0, 0, "[错误] 发送完成帧失败");
+        close_socket(sock);
+        return ERR_SEND_DATA;
     }
     report(cb, file_size, file_size, "[成功] 文件发送完成: " + fname);
 
@@ -353,33 +371,56 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
         return ERR_CREATE_FILE;
     }
 
-    std::vector<char> buf(BUFFER_SIZE);
+    // 使用二进制帧协议读取数据 (支持取消通知和完成通知)
     uint64_t received = 0;
-    while (received < hdr.file_size) {
-        uint64_t want = std::min<uint64_t>(BUFFER_SIZE, hdr.file_size - received);
-        int n = ::recv(sock, buf.data(), static_cast<int>(want), 0);
-        if (n <= 0) {
-            report(cb, 0, 0, "[错误] 接收数据失败, errno=" + std::to_string(sock_errno()));
+    uint8_t frame_type = 0;
+    std::vector<char> frame_data;
+    uint32_t frame_len = 0;
+    bool done = false;
+    while (!done) {
+        if (!read_frame(sock, frame_type, frame_data, frame_len)) {
+            report(cb, 0, 0, "[错误] 连接断开 (接收数据失败), errno=" + std::to_string(sock_errno()));
             out.close();
             std::remove(out_path.c_str());
             close_socket(sock);
             return ERR_RECV_DATA;
         }
-        out.write(buf.data(), n);
-        if (!out) {
-            report(cb, 0, 0, "[错误] 写入文件失败");
-            out.close();
-            std::remove(out_path.c_str());
-            close_socket(sock);
-            return ERR_WRITE_FILE;
-        }
-        received += static_cast<uint64_t>(n);
-        if (!report(cb, received, hdr.file_size, "")) {
-            report(cb, 0, 0, "[信息] 用户已取消接收");
+        if (frame_type == FRAME_CANCEL) {
+            // 发送方主动取消
+            report(cb, 0, 0, "[信息] 发送方已取消传输");
             out.close();
             std::remove(out_path.c_str());
             close_socket(sock);
             return CANCELED;
+        }
+        if (frame_type == FRAME_DONE) {
+            // 数据传输完毕
+            done = true;
+            break;
+        }
+        if (frame_type == FRAME_DATA) {
+            out.write(frame_data.data(), frame_len);
+            if (!out) {
+                report(cb, 0, 0, "[错误] 写入文件失败");
+                out.close();
+                std::remove(out_path.c_str());
+                close_socket(sock);
+                return ERR_WRITE_FILE;
+            }
+            received += frame_len;
+            if (!report(cb, received, hdr.file_size, "")) {
+                report(cb, 0, 0, "[信息] 用户已取消接收");
+                out.close();
+                std::remove(out_path.c_str());
+                close_socket(sock);
+                return CANCELED;
+            }
+        } else {
+            report(cb, 0, 0, "[错误] 未知帧类型: " + std::to_string(frame_type));
+            out.close();
+            std::remove(out_path.c_str());
+            close_socket(sock);
+            return ERR_RECV_DATA;
         }
     }
     out.flush();

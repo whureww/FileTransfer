@@ -9,7 +9,20 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#endif
+
 namespace ft {
+
+// 跨平台 socket 类型 (需在 socket_util.h 之前声明, 供头文件内联函数使用)
+#ifdef _WIN32
+using socket_t = SOCKET;
+constexpr socket_t INVALID_SOCK = INVALID_SOCKET;
+#else
+using socket_t = int;
+constexpr socket_t INVALID_SOCK = -1;
+#endif
 
 // 协议魔数，用于校验数据包合法性
 constexpr char MAGIC[4] = {'F', 'T', '0', '1'};
@@ -68,6 +81,30 @@ struct PacketHeader {
 #pragma pack(pop)
 
 static_assert(sizeof(PacketHeader) == 16, "PacketHeader must be 16 bytes");
+
+// ===== 数据传输帧协议 (二进制, 用于客户端间/客户端与中继间的数据传输阶段) =====
+// 帧结构: [1字节类型][4字节长度][payload]
+// 类型:
+//   0x01 FRAME_DATA   - 数据帧, payload = 文件数据
+//   0x02 FRAME_CANCEL - 取消帧, 无 payload, 表示发送方/接收方主动取消
+//   0x03 FRAME_DONE   - 完成帧, 无 payload, 表示数据传输完毕
+constexpr uint8_t FRAME_DATA   = 0x01;
+constexpr uint8_t FRAME_CANCEL = 0x02;
+constexpr uint8_t FRAME_DONE   = 0x03;
+
+// 写一个帧到 socket (帧头 + payload)
+// 返回 true 表示成功, false 表示连接断开
+bool write_frame(socket_t sock, uint8_t type, const char* data, uint32_t len);
+
+// 从 socket 读取一个完整帧
+// type_out: 输出帧类型
+// data_out: 输出 payload 数据 (由调用者释放)
+// len_out: 输出 payload 长度
+// 返回: true=成功读取帧, false=连接断开/出错
+//   type_out == FRAME_CANCEL 表示对端主动取消
+//   type_out == FRAME_DONE   表示对端发送完数据
+bool read_frame(socket_t sock, uint8_t& type_out,
+                std::vector<char>& data_out, uint32_t& len_out);
 
 // 进度回调函数
 //   done  : 已传输字节数

@@ -1358,7 +1358,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         // 标题
         g_ctx.hTitle = CreateCtrl(hWnd, L"static",
-                   L"FileTransfer v0.0.4  -  文件传输 (局域网 / 房间码中继)",
+                   L"FileTransfer v0.0.5  -  文件传输 (局域网 / 房间码中继)",
                    SS_CENTER, 0, 0, 10, 10, 0);
 
         // ===== 模式选择区 =====
@@ -1694,6 +1694,15 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             MessageBoxW(hWnd, L"传输失败, 请查看日志了解详情",
                         L"失败", MB_OK | MB_ICONERROR);
         }
+        // 清理传输相关的 UI 内容 (房间码、文件路径、进度条)
+        // 让用户可以立即开始新的传输
+        SendMessageW(g_ctx.hProgress, PBM_SETPOS, 0, 0);
+        SetWindowTextW(g_ctx.hRSendCodeEdit, L"（创建后显示）");
+        SetWindowTextW(g_ctx.hRRecvCodeEdit, L"6位字母数字");
+        SetWindowTextW(g_ctx.hRSendFileEdit, L"选择要发送的文件");
+        SetWindowTextW(g_ctx.hFileEdit, L"选择要发送的文件");
+        // 注意: 保留保存目录方便用户重复使用
+        EnableWindow(g_ctx.hCancelBtn, FALSE);
         return 0;
     }
 
@@ -1804,7 +1813,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     AdjustWindowRectEx(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0);
 
     g_ctx.hwnd = CreateWindowExW(
-        0, cls_name, L"FileTransfer v0.0.4 - 文件传输",
+        0, cls_name, L"FileTransfer v0.0.5 - 文件传输",
         WS_OVERLAPPEDWINDOW,  // 完整窗口样式: 可调整大小、可最大化
         CW_USEDEFAULT, CW_USEDEFAULT,
         rc.right - rc.left, rc.bottom - rc.top,

@@ -39,8 +39,42 @@ using ft::detail::recv_all;
 using ft::detail::report;
 using ft::detail::sanitize_filename;
 using ft::detail::unique_filepath;
+using ft::write_frame;
+using ft::read_frame;
 
 namespace ft {
+
+// ===== 二进制帧协议实现 =====
+
+#pragma pack(push, 1)
+struct FrameHeader {
+    uint8_t type;
+    uint32_t length;
+};
+#pragma pack(pop)
+
+static_assert(sizeof(FrameHeader) == 5, "FrameHeader must be 5 bytes");
+
+bool write_frame(socket_t sock, uint8_t type, const char* data, uint32_t len) {
+    FrameHeader hdr{type, len};
+    if (!send_all(sock, reinterpret_cast<const char*>(&hdr), sizeof(hdr))) return false;
+    if (len > 0 && !send_all(sock, data, len)) return false;
+    return true;
+}
+
+bool read_frame(socket_t sock, uint8_t& type_out,
+                std::vector<char>& data_out, uint32_t& len_out) {
+    FrameHeader hdr;
+    if (!recv_all(sock, reinterpret_cast<char*>(&hdr), sizeof(hdr))) return false;
+    type_out = hdr.type;
+    len_out = hdr.length;
+    data_out.clear();
+    if (hdr.length > 0) {
+        data_out.resize(hdr.length);
+        if (!recv_all(sock, data_out.data(), hdr.length)) return false;
+    }
+    return true;
+}
 
 bool init_network() {
 #ifdef _WIN32
