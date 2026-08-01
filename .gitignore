@@ -1,0 +1,51 @@
+# 构建产物
+build/
+*/build/
+
+# CMake 缓存
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.cmake
+!CMakeLists.txt
+
+# 编译器输出
+*.obj
+*.o
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.exp
+
+# IDE 文件
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln
+*.vcxproj*
+.idea/
+
+# 安装器相关文件 (打包脚本、生成的安装程序、中间文件)
+installer/
+*/build/installer/
+*.iss
+*_Setup.exe
+
+# 日志文件
+*.log
+relay_log.txt
+
+# 临时文件
+*.tmp
+*.bak
+*~
+
+# 敏感文件 - 真实中继服务器地址 (仅本地使用, 不上传)
+secret_real.cpp
+secret_local.cpp
+
+# 编译器 ID 文件
+ShowIncludes/

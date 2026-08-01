@@ -1,0 +1,54 @@
+# 源代码
+**/*.cpp
+**/*.h
+**/*.c
+
+# 构建产物 (仅保留 installer 中的 exe)
+build/
+*/build/CMakeFiles/
+*/build/CMakeCache.txt
+*/build/Makefile
+*/build/cmake_install.cmake
+*/build/*.obj
+*/build/*.pdb
+*/build/*.ilk
+*/build/*.exp
+*/build/*.lib
+
+# 构建配置 (npm 包不需要自行编译)
+CMakeLists.txt
+*/CMakeLists.txt
+build.bat
+*/build.bat
+
+# IDE 文件
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln
+*.vcxproj*
+.idea/
+
+# 安装脚本模板 (已编译进安装器)
+installer/
+*/build/installer/*.iss
+
+# 资源源文件 (图标已编译进 exe)
+assets/
+
+# 文档
+README.md
+.gitignore
+.npmignore
+
+# 敏感文件
+secret_real.cpp
+secret_local.cpp
+secret_local.cpp.example
+
+# 临时文件
+*.tmp
+*.bak
+*~
+*.log
