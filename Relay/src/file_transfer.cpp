@@ -62,13 +62,13 @@ int send_file(const std::string& ip, unsigned short port,
     std::ifstream in(filepath, std::ios::binary);
     if (!in.is_open()) {
         report(cb, 0, 0, "[错误] 无法打开文件: " + filepath);
-        return 1;
+        return ERR_OPEN_FILE;
     }
 
     uint64_t file_size = 0;
     if (!get_file_size(in, file_size)) {
         report(cb, 0, 0, "[错误] 无法获取文件大小: " + filepath);
-        return 2;
+        return ERR_FILE_SIZE;
     }
 
     std::string fname = basename(filepath);
@@ -76,7 +76,7 @@ int send_file(const std::string& ip, unsigned short port,
     socket_t sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sock == INVALID_SOCK) {
         report(cb, 0, 0, "[错误] 创建 socket 失败, errno=" + std::to_string(sock_errno()));
-        return 3;
+        return ERR_SOCKET;
     }
 
     sockaddr_in addr{};
@@ -85,7 +85,7 @@ int send_file(const std::string& ip, unsigned short port,
     if (::inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) <= 0) {
         report(cb, 0, 0, "[错误] 无效的 IP 地址: " + ip);
         close_socket(sock);
-        return 4;
+        return ERR_CONNECT;
     }
 
     if (!report(cb, 0, 0, "[信息] 正在连接 " + ip + ":" + std::to_string(port) + " ...")) {
@@ -95,7 +95,7 @@ int send_file(const std::string& ip, unsigned short port,
     if (::connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == -1) {
         report(cb, 0, 0, "[错误] 连接失败, errno=" + std::to_string(sock_errno()));
         close_socket(sock);
-        return 5;
+        return ERR_CONNECT;
     }
     if (!report(cb, 0, 0, "[信息] 连接成功, 开始发送: " + fname + " (" + std::to_string(file_size) + " bytes)")) {
         close_socket(sock);
@@ -112,12 +112,12 @@ int send_file(const std::string& ip, unsigned short port,
     if (!send_all(sock, reinterpret_cast<const char*>(&hdr), sizeof(hdr))) {
         report(cb, 0, 0, "[错误] 发送头部失败, errno=" + std::to_string(sock_errno()));
         close_socket(sock);
-        return 6;
+        return ERR_SEND_HDR;
     }
     if (!send_all(sock, fname.data(), fname.size())) {
         report(cb, 0, 0, "[错误] 发送文件名失败, errno=" + std::to_string(sock_errno()));
         close_socket(sock);
-        return 7;
+        return ERR_SEND_HDR;
     }
 
     std::vector<char> buf(BUFFER_SIZE);
@@ -130,12 +130,12 @@ int send_file(const std::string& ip, unsigned short port,
         if (got <= 0) {
             report(cb, 0, 0, "[错误] 读取文件失败");
             close_socket(sock);
-            return 8;
+            return ERR_READ_FILE;
         }
         if (!send_all(sock, buf.data(), static_cast<std::size_t>(got))) {
             report(cb, 0, 0, "[错误] 发送数据失败, errno=" + std::to_string(sock_errno()));
             close_socket(sock);
-            return 9;
+            return ERR_SEND_DATA;
         }
         sent += static_cast<uint64_t>(got);
         if (!report(cb, sent, file_size, "")) {
@@ -157,7 +157,7 @@ int recv_file(unsigned short port, const std::string& output_dir,
     socket_t listen_sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listen_sock == INVALID_SOCK) {
         report(cb, 0, 0, "[错误] 创建 socket 失败, errno=" + std::to_string(sock_errno()));
-        return 3;
+        return ERR_SOCKET;
     }
 
     int yes = 1;
@@ -172,12 +172,12 @@ int recv_file(unsigned short port, const std::string& output_dir,
     if (::bind(listen_sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == -1) {
         report(cb, 0, 0, "[错误] bind 失败, errno=" + std::to_string(sock_errno()));
         close_socket(listen_sock);
-        return 4;
+        return ERR_BIND;
     }
     if (::listen(listen_sock, 1) == -1) {
         report(cb, 0, 0, "[错误] listen 失败, errno=" + std::to_string(sock_errno()));
         close_socket(listen_sock);
-        return 5;
+        return ERR_LISTEN;
     }
 
     if (!report(cb, 0, 0, "[信息] 等待接收, 监听端口 " + std::to_string(port) + ", 保存到: " + out_dir)) {
@@ -189,15 +189,41 @@ int recv_file(unsigned short port, const std::string& output_dir,
         return CANCELED;
     }
 
+    // 使用 select 轮询 accept, 以便用户取消时能及时退出 (每 200ms 检查一次 cancel)
     sockaddr_in client_addr{};
     int client_len = sizeof(client_addr);
-    socket_t conn = ::accept(listen_sock,
-                             reinterpret_cast<sockaddr*>(&client_addr),
-                             &client_len);
-    if (conn == INVALID_SOCK) {
-        report(cb, 0, 0, "[错误] accept 失败, errno=" + std::to_string(sock_errno()));
-        close_socket(listen_sock);
-        return 6;
+    socket_t conn = INVALID_SOCK;
+    while (conn == INVALID_SOCK) {
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(listen_sock, &rfds);
+        timeval tv{0, 200 * 1000};  // 200ms 超时
+#ifdef _WIN32
+        int sel = ::select(0, &rfds, nullptr, nullptr, &tv);
+#else
+        int sel = ::select(listen_sock + 1, &rfds, nullptr, nullptr, &tv);
+#endif
+        if (sel == 0) {
+            // 超时, 检查用户是否取消
+            if (!report(cb, 0, 0, "")) {
+                close_socket(listen_sock);
+                return CANCELED;
+            }
+            continue;
+        }
+        if (sel < 0) {
+            report(cb, 0, 0, "[错误] select 失败, errno=" + std::to_string(sock_errno()));
+            close_socket(listen_sock);
+            return ERR_SOCKET;
+        }
+        conn = ::accept(listen_sock,
+                        reinterpret_cast<sockaddr*>(&client_addr),
+                        &client_len);
+        if (conn == INVALID_SOCK) {
+            report(cb, 0, 0, "[错误] accept 失败, errno=" + std::to_string(sock_errno()));
+            close_socket(listen_sock);
+            return ERR_SOCKET;
+        }
     }
 
     char ip_buf[INET_ADDRSTRLEN] = {0};
@@ -210,26 +236,26 @@ int recv_file(unsigned short port, const std::string& output_dir,
         report(cb, 0, 0, "[错误] 接收头部失败");
         close_socket(conn);
         close_socket(listen_sock);
-        return 7;
+        return ERR_RECV_HDR;
     }
     if (std::memcmp(hdr.magic, MAGIC, 4) != 0) {
         report(cb, 0, 0, "[错误] 协议魔数不匹配, 数据非法");
         close_socket(conn);
         close_socket(listen_sock);
-        return 8;
+        return ERR_BAD_MAGIC;
     }
     if (hdr.version != PROTOCOL_VERSION) {
         report(cb, 0, 0, "[错误] 协议版本不匹配 (期望 " + std::to_string(PROTOCOL_VERSION)
                           + ", 收到 " + std::to_string(hdr.version) + "), 请升级到相同版本");
         close_socket(conn);
         close_socket(listen_sock);
-        return 8;
+        return ERR_BAD_MAGIC;
     }
     if (hdr.filename_len == 0 || hdr.filename_len > 4096) {
         report(cb, 0, 0, "[错误] 文件名长度异常: " + std::to_string(hdr.filename_len));
         close_socket(conn);
         close_socket(listen_sock);
-        return 9;
+        return ERR_BAD_NAME;
     }
 
     std::vector<char> name_buf(hdr.filename_len);
@@ -237,7 +263,7 @@ int recv_file(unsigned short port, const std::string& output_dir,
         report(cb, 0, 0, "[错误] 接收文件名失败");
         close_socket(conn);
         close_socket(listen_sock);
-        return 10;
+        return ERR_RECV_NAME;
     }
     std::string fname(name_buf.begin(), name_buf.end());
 
@@ -259,7 +285,7 @@ int recv_file(unsigned short port, const std::string& output_dir,
                            " 字节, 可用 " + std::to_string(si.available) + " 字节");
             close_socket(conn);
             close_socket(listen_sock);
-            return 11;
+            return ERR_CREATE_FILE;
         }
     }
 
@@ -268,7 +294,7 @@ int recv_file(unsigned short port, const std::string& output_dir,
         report(cb, 0, 0, "[错误] 无法创建输出文件: " + out_path);
         close_socket(conn);
         close_socket(listen_sock);
-        return 11;
+        return ERR_CREATE_FILE;
     }
 
     std::vector<char> buf(BUFFER_SIZE);
@@ -280,7 +306,7 @@ int recv_file(unsigned short port, const std::string& output_dir,
             report(cb, 0, 0, "[错误] 接收数据失败, errno=" + std::to_string(sock_errno()));
             close_socket(conn);
             close_socket(listen_sock);
-            return 12;
+            return ERR_RECV_DATA;
         }
         out.write(buf.data(), n);
         if (!out) {
@@ -289,7 +315,7 @@ int recv_file(unsigned short port, const std::string& output_dir,
             std::remove(out_path.c_str());
             close_socket(conn);
             close_socket(listen_sock);
-            return 13;
+            return ERR_WRITE_FILE;
         }
         received += static_cast<uint64_t>(n);
         if (!report(cb, received, hdr.file_size, "")) {

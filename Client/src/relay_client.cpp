@@ -50,12 +50,12 @@ int relay_send_file(const std::string& relay_host, unsigned short relay_port,
     std::ifstream in(filepath, std::ios::binary);
     if (!in.is_open()) {
         report(cb, 0, 0, "[错误] 无法打开文件: " + filepath);
-        return 1;
+        return ERR_OPEN_FILE;
     }
     uint64_t file_size = 0;
     if (!get_file_size(in, file_size)) {
         report(cb, 0, 0, "[错误] 无法获取文件大小: " + filepath);
-        return 2;
+        return ERR_FILE_SIZE;
     }
     std::string fname = basename(filepath);
 
@@ -63,7 +63,7 @@ int relay_send_file(const std::string& relay_host, unsigned short relay_port,
     socket_t sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sock == INVALID_SOCK) {
         report(cb, 0, 0, "[错误] 创建 socket 失败, errno=" + std::to_string(sock_errno()));
-        return 3;
+        return ERR_SOCKET;
     }
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -71,7 +71,7 @@ int relay_send_file(const std::string& relay_host, unsigned short relay_port,
     if (::inet_pton(AF_INET, relay_host.c_str(), &addr.sin_addr) <= 0) {
         report(cb, 0, 0, "[错误] 无效的中继服务器地址: " + relay_host);
         close_socket(sock);
-        return 4;
+        return ERR_CONNECT;
     }
     if (!report(cb, 0, 0, "[信息] 正在连接中继服务器 " + relay_host + ":" + std::to_string(relay_port) + " ...")) {
         close_socket(sock);
@@ -80,14 +80,14 @@ int relay_send_file(const std::string& relay_host, unsigned short relay_port,
     if (::connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == -1) {
         report(cb, 0, 0, "[错误] 连接中继服务器失败, errno=" + std::to_string(sock_errno()));
         close_socket(sock);
-        return 5;
+        return ERR_CONNECT;
     }
 
     // 2. 发送 CREATE
     if (!send_line(sock, "CREATE")) {
         report(cb, 0, 0, "[错误] 发送 CREATE 失败");
         close_socket(sock);
-        return 6;
+        return ERR_RELAY_LINE;
     }
 
     // 3. 读取 "CODE <code>"
@@ -95,13 +95,13 @@ int relay_send_file(const std::string& relay_host, unsigned short relay_port,
     if (!recv_line(sock, line)) {
         report(cb, 0, 0, "[错误] 读取房间码失败");
         close_socket(sock);
-        return 7;
+        return ERR_RELAY_LINE;
     }
     const std::string code_prefix = "CODE ";
     if (line.compare(0, code_prefix.size(), code_prefix) != 0) {
         report(cb, 0, 0, "[错误] 中继返回异常: " + line);
         close_socket(sock);
-        return 8;
+        return ERR_RELAY_CODE;
     }
     std::string code = line.substr(code_prefix.size());
 
@@ -116,15 +116,44 @@ int relay_send_file(const std::string& relay_host, unsigned short relay_port,
     }
 
     // 4. 等待 PEER (中继会在接收方加入后发送 PEER; 也可能发送 TIMEOUT/ERROR)
-    if (!recv_line(sock, line)) {
-        report(cb, 0, 0, "[错误] 等待接收方时连接断开");
-        close_socket(sock);
-        return 9;
+    // 使用 select 轮询, 以便用户取消时能及时退出 (每 200ms 检查一次 cancel)
+    {
+        bool got_line = false;
+        while (!got_line) {
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(sock, &rfds);
+            timeval tv{0, 200 * 1000};
+#ifdef _WIN32
+            int sel = ::select(0, &rfds, nullptr, nullptr, &tv);
+#else
+            int sel = ::select(sock + 1, &rfds, nullptr, nullptr, &tv);
+#endif
+            if (sel == 0) {
+                // 超时, 检查用户是否取消
+                if (!report(cb, 0, 0, "")) {
+                    report(cb, 0, 0, "[信息] 用户已取消发送");
+                    close_socket(sock);
+                    return CANCELED;
+                }
+                continue;
+            }
+            if (sel < 0) {
+                break;  // select 出错, 退回 recv_line 尝试
+            }
+            got_line = recv_line(sock, line);
+            if (!got_line) break;
+        }
+        if (!got_line) {
+            report(cb, 0, 0, "[错误] 等待接收方时连接断开");
+            close_socket(sock);
+            return ERR_RELAY_LINE;
+        }
     }
     if (line != "PEER") {
         report(cb, 0, 0, "[错误] 中继返回: " + line + " (期待 PEER)");
         close_socket(sock);
-        return 10;
+        return ERR_RELAY_PEER;
     }
     if (!report(cb, 0, 0, "[信息] 接收方已连接, 开始发送: " + fname + " (" + std::to_string(file_size) + " bytes)")) {
         close_socket(sock);
@@ -141,12 +170,12 @@ int relay_send_file(const std::string& relay_host, unsigned short relay_port,
     if (!send_all(sock, reinterpret_cast<const char*>(&hdr), sizeof(hdr))) {
         report(cb, 0, 0, "[错误] 发送头部失败, errno=" + std::to_string(sock_errno()));
         close_socket(sock);
-        return 11;
+        return ERR_SEND_HDR;
     }
     if (!send_all(sock, fname.data(), fname.size())) {
         report(cb, 0, 0, "[错误] 发送文件名失败, errno=" + std::to_string(sock_errno()));
         close_socket(sock);
-        return 12;
+        return ERR_SEND_HDR;
     }
 
     // 6. 流式发送文件内容
@@ -160,12 +189,12 @@ int relay_send_file(const std::string& relay_host, unsigned short relay_port,
         if (got <= 0) {
             report(cb, 0, 0, "[错误] 读取文件失败");
             close_socket(sock);
-            return 13;
+            return ERR_READ_FILE;
         }
         if (!send_all(sock, buf.data(), static_cast<std::size_t>(got))) {
             report(cb, 0, 0, "[错误] 发送数据失败, errno=" + std::to_string(sock_errno()));
             close_socket(sock);
-            return 14;
+            return ERR_SEND_DATA;
         }
         sent += static_cast<uint64_t>(got);
         if (!report(cb, sent, file_size, "")) {
@@ -201,14 +230,14 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
             return !((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'));
         })) {
         report(cb, 0, 0, "[错误] 房间码必须是 6 位字母数字");
-        return 1;
+        return ERR_RELAY_CODE;
     }
 
     // 1. 连接中继服务器
     socket_t sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sock == INVALID_SOCK) {
         report(cb, 0, 0, "[错误] 创建 socket 失败, errno=" + std::to_string(sock_errno()));
-        return 2;
+        return ERR_SOCKET;
     }
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -216,7 +245,7 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
     if (::inet_pton(AF_INET, relay_host.c_str(), &addr.sin_addr) <= 0) {
         report(cb, 0, 0, "[错误] 无效的中继服务器地址: " + relay_host);
         close_socket(sock);
-        return 3;
+        return ERR_CONNECT;
     }
     if (!report(cb, 0, 0, "[信息] 正在连接中继服务器 " + relay_host + ":" + std::to_string(relay_port) + " ...")) {
         close_socket(sock);
@@ -225,14 +254,14 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
     if (::connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == -1) {
         report(cb, 0, 0, "[错误] 连接中继服务器失败, errno=" + std::to_string(sock_errno()));
         close_socket(sock);
-        return 4;
+        return ERR_CONNECT;
     }
 
     // 2. 发送 JOIN <code>
     if (!send_line(sock, "JOIN " + code)) {
         report(cb, 0, 0, "[错误] 发送 JOIN 失败");
         close_socket(sock);
-        return 5;
+        return ERR_RELAY_LINE;
     }
 
     // 3. 读取 OK
@@ -240,12 +269,12 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
     if (!recv_line(sock, line)) {
         report(cb, 0, 0, "[错误] 读取中继响应失败");
         close_socket(sock);
-        return 6;
+        return ERR_RELAY_LINE;
     }
     if (line != "OK") {
         report(cb, 0, 0, "[错误] 加入房间失败: " + line);
         close_socket(sock);
-        return 7;
+        return ERR_RELAY_ROOM;
     }
     if (!report(cb, 0, 0, "[信息] 已加入房间 " + code + ", 等待接收文件...")) {
         close_socket(sock);
@@ -257,30 +286,30 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
     if (!recv_all(sock, reinterpret_cast<char*>(&hdr), sizeof(hdr))) {
         report(cb, 0, 0, "[错误] 接收头部失败");
         close_socket(sock);
-        return 8;
+        return ERR_RECV_HDR;
     }
     if (std::memcmp(hdr.magic, MAGIC, 4) != 0) {
         report(cb, 0, 0, "[错误] 协议魔数不匹配, 数据非法");
         close_socket(sock);
-        return 9;
+        return ERR_BAD_MAGIC;
     }
     if (hdr.version != PROTOCOL_VERSION) {
         report(cb, 0, 0, "[错误] 协议版本不匹配 (期望 " + std::to_string(PROTOCOL_VERSION)
                           + ", 收到 " + std::to_string(hdr.version) + "), 请升级到相同版本");
         close_socket(sock);
-        return 9;
+        return ERR_BAD_MAGIC;
     }
     if (hdr.filename_len == 0 || hdr.filename_len > 4096) {
         report(cb, 0, 0, "[错误] 文件名长度异常: " + std::to_string(hdr.filename_len));
         close_socket(sock);
-        return 10;
+        return ERR_BAD_NAME;
     }
 
     std::vector<char> name_buf(hdr.filename_len);
     if (!recv_all(sock, name_buf.data(), hdr.filename_len)) {
         report(cb, 0, 0, "[错误] 接收文件名失败");
         close_socket(sock);
-        return 11;
+        return ERR_RECV_NAME;
     }
     std::string fname(name_buf.begin(), name_buf.end());
 
@@ -301,7 +330,7 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
             report(cb, 0, 0, "[错误] 磁盘空间不足: 需要 " + std::to_string(hdr.file_size) +
                            " 字节, 可用 " + std::to_string(si.available) + " 字节");
             close_socket(sock);
-            return 12;
+            return ERR_CREATE_FILE;
         }
     }
 
@@ -309,7 +338,7 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
     if (!out.is_open()) {
         report(cb, 0, 0, "[错误] 无法创建输出文件: " + out_path);
         close_socket(sock);
-        return 12;
+        return ERR_CREATE_FILE;
     }
 
     std::vector<char> buf(BUFFER_SIZE);
@@ -322,7 +351,7 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
             out.close();
             std::remove(out_path.c_str());
             close_socket(sock);
-            return 13;
+            return ERR_RECV_DATA;
         }
         out.write(buf.data(), n);
         if (!out) {
@@ -330,7 +359,7 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
             out.close();
             std::remove(out_path.c_str());
             close_socket(sock);
-            return 14;
+            return ERR_WRITE_FILE;
         }
         received += static_cast<uint64_t>(n);
         if (!report(cb, received, hdr.file_size, "")) {

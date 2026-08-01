@@ -135,12 +135,15 @@ std::string sanitize_filename(const std::string& name) {
         safe_name.push_back(c);
     }
     if (safe_name.empty()) safe_name = "received_file";
-    // 防止 Windows 保留设备名 (CON, PRN, NUL, AUX, COM1-9, LPT1-9)
+    // 防止 Windows 保留设备名 (CON, PRN, NUL, AUX, COM1-9, LPT1-9, CONIN$, CONOUT$)
     std::string upper = safe_name;
     for (char& c : upper) { if (c >= 'a' && c <= 'z') c -= 32; }
     if (upper == "CON" || upper == "PRN" || upper == "NUL" || upper == "AUX" ||
-        (upper.size() == 4 && upper.compare(0, 3, "COM") == 0 && upper[3] >= '1' && upper[3] <= '9') ||
-        (upper.size() == 4 && upper.compare(0, 3, "LPT") == 0 && upper[3] >= '1' && upper[3] <= '9')) {
+        upper == "CONIN$" || upper == "CONOUT$" ||
+        (upper.size() >= 4 && upper.compare(0, 3, "COM") == 0 &&
+         std::all_of(upper.begin() + 3, upper.end(), [](char c){ return c >= '0' && c <= '9'; })) ||
+        (upper.size() >= 4 && upper.compare(0, 3, "LPT") == 0 &&
+         std::all_of(upper.begin() + 3, upper.end(), [](char c){ return c >= '0' && c <= '9'; }))) {
         safe_name = "received_" + safe_name;
     }
     return safe_name;

@@ -28,11 +28,11 @@ cmake_install.cmake
 *.vcxproj*
 .idea/
 
-# 安装器相关文件 (打包脚本、生成的安装程序、中间文件)
-installer/
+# 安装器相关文件 (生成的安装程序、中间文件)
 */build/installer/
-*.iss
 *_Setup.exe
+# 仅排除 build 目录下生成的 .iss (由 configure_file 产生), 保留 installer/ 下的模板
+*/build/installer/*.iss
 
 # 日志文件
 *.log

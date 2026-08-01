@@ -279,11 +279,20 @@ void handle_receiver(RelayState& st, socket_t sock, const std::string& first_lin
     while (!code.empty() && (code.back() == ' ' || code.back() == '\t')) code.pop_back();
     while (!code.empty() && (code.front() == ' ' || code.front() == '\t')) code.erase(code.begin());
 
-    // 校验房间码格式 (防止超长输入导致问题)
+    // 校验房间码格式 (长度 + 字符集: 与 gen_room_code 使用的字符集一致)
     if (code.size() != ROOM_CODE_LEN) {
         send_line(sock, "ERROR invalid room code");
         close_socket(sock);
         return;
+    }
+    // 字符集校验: A-Z (排除 I/O) + 2-9 (排除 0/1)
+    for (char c : code) {
+        if (!((c >= 'A' && c <= 'Z' && c != 'I' && c != 'O') ||
+              (c >= '0' && c <= '9' && c != '0' && c != '1'))) {
+            send_line(sock, "ERROR invalid room code");
+            close_socket(sock);
+            return;
+        }
     }
 
     Room* room = nullptr;
@@ -310,14 +319,30 @@ void handle_receiver(RelayState& st, socket_t sock, const std::string& first_lin
     if (!send_line(sock, "OK")) {
         relay_log("房间 " + code + ": 发送 OK 失败, receiver 断开");
         // 失败: 回滚 receiver, 通知 sender 继续 (或清理)
+        // 注意: sender 线程可能已超时清理并 delete 了 room,
+        //       必须在锁内通过 map 查找确认 room 仍存活, 避免UAF
         std::lock_guard<std::mutex> lk(st.mtx);
-        room->receiver = INVALID_SOCK;
-        room->dead = true;  // 让 sender 退出等待并清理
+        auto it = st.rooms.find(code);
+        if (it != st.rooms.end() && it->second == room) {
+            room->receiver = INVALID_SOCK;
+            room->dead = true;  // 让 sender 退出等待并清理
+        }
+        // 若 room 已从 map 移除, 说明 sender 已 delete 它, 不再碰 room
         close_socket(sock);
         return;
     }
 
     // OK 已发送, 正式触发配对 (sender 线程在 select 循环里检测到 paired 后会发送 PEER)
+    // 同样需要确认 room 仍存活: sender 可能在等待期间已超时清理
+    {
+        std::lock_guard<std::mutex> lk(st.mtx);
+        auto it = st.rooms.find(code);
+        if (it == st.rooms.end() || it->second != room) {
+            // sender 已清理 room, receiver socket 已被 sender 关闭
+            close_socket(sock);
+            return;
+        }
+    }
     room->paired = true;
     // 接收方线程到此结束; socket 由 sender 线程的 relay_forward_loop 继续使用
     // (不关闭 sock, 所有权移交给 sender 线程)

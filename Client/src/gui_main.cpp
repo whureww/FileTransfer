@@ -144,6 +144,9 @@ struct AppContext {
     unsigned short custom_relay_port = 0;
     bool use_custom_relay = false;
 
+    // 进度消息节流时间戳 (避免 static 变量在多线程下的问题)
+    std::chrono::steady_clock::time_point last_progress_tick;
+
     // 中继 - 接收方
     HWND hRRecvGroup = nullptr;
     HWND hRRecvCodeLbl = nullptr, hRRecvCodeEdit = nullptr;
@@ -164,16 +167,16 @@ static AppContext g_ctx;
 
 // 节流发送进度消息 (100ms 间隔, 状态消息和完成消息立即发送)
 // 避免 1GB 文件产生 1024 次 PostMessage + new/delete 导致 UI 卡顿
+// last_tick 存储在 g_ctx 中, 避免多线程共享 static 变量的潜在问题
 static void post_progress(uint64_t done, uint64_t total, const std::string& msg) {
-    static auto last_tick = std::chrono::steady_clock::now();
     bool is_status = (total == 0);                        // 状态消息立即发送
     bool is_done = (total > 0 && done >= total);          // 完成消息立即发送
     if (!is_status && !is_done) {
         auto now = std::chrono::steady_clock::now();
-        if (now - last_tick < std::chrono::milliseconds(100)) return;
-        last_tick = now;
+        if (now - g_ctx.last_progress_tick < std::chrono::milliseconds(100)) return;
+        g_ctx.last_progress_tick = now;
     } else {
-        last_tick = std::chrono::steady_clock::now();
+        g_ctx.last_progress_tick = std::chrono::steady_clock::now();
     }
     auto* pm = new ProgressMsg{done, total, msg};
     PostMessageW(g_ctx.hwnd, WM_APP_UPDATE, 0, (LPARAM)pm);
@@ -523,6 +526,56 @@ static void SaveCloseAction(int action) {
         DWORD val = (DWORD)action;
         RegSetValueExW(hKey, L"CloseAction", 0, REG_DWORD,
                        (LPBYTE)&val, sizeof(val));
+        RegCloseKey(hKey);
+    }
+}
+
+// ========== 自定义中继服务器设置持久化 (注册表) ==========
+static void LoadCustomRelay() {
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_KEY, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        // 读取 use_custom_relay (DWORD)
+        DWORD use_custom = 0, size = sizeof(use_custom);
+        if (RegQueryValueExW(hKey, L"UseCustomRelay", nullptr, nullptr,
+                             (LPBYTE)&use_custom, &size) == ERROR_SUCCESS && use_custom) {
+            // 读取 host (REG_SZ)
+            wchar_t host_buf[256] = {0};
+            DWORD host_size = sizeof(host_buf);
+            if (RegQueryValueExW(hKey, L"CustomRelayHost", nullptr, nullptr,
+                                 (LPBYTE)host_buf, &host_size) == ERROR_SUCCESS && host_size > 0) {
+                std::string host = wide_to_utf8(host_buf);
+                if (!host.empty()) {
+                    DWORD port = 0; DWORD port_size = sizeof(port);
+                    if (RegQueryValueExW(hKey, L"CustomRelayPort", nullptr, nullptr,
+                                         (LPBYTE)&port, &port_size) == ERROR_SUCCESS &&
+                        port >= 1 && port <= 65535) {
+                        g_ctx.custom_relay_host = host;
+                        g_ctx.custom_relay_port = static_cast<unsigned short>(port);
+                        g_ctx.use_custom_relay = true;
+                    }
+                }
+            }
+        }
+        RegCloseKey(hKey);
+    }
+}
+
+static void SaveCustomRelay() {
+    HKEY hKey;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_KEY, 0, nullptr, 0,
+                        KEY_WRITE, nullptr, &hKey, nullptr) == ERROR_SUCCESS) {
+        DWORD use_custom = g_ctx.use_custom_relay ? 1 : 0;
+        RegSetValueExW(hKey, L"UseCustomRelay", 0, REG_DWORD,
+                       (LPBYTE)&use_custom, sizeof(use_custom));
+        if (g_ctx.use_custom_relay) {
+            std::wstring host_w = utf8_to_wide(g_ctx.custom_relay_host);
+            RegSetValueExW(hKey, L"CustomRelayHost", 0, REG_SZ,
+                           (LPBYTE)host_w.c_str(),
+                           static_cast<DWORD>((host_w.size() + 1) * sizeof(wchar_t)));
+            DWORD port = g_ctx.custom_relay_port;
+            RegSetValueExW(hKey, L"CustomRelayPort", 0, REG_DWORD,
+                           (LPBYTE)&port, sizeof(port));
+        }
         RegCloseKey(hKey);
     }
 }
@@ -1278,6 +1331,7 @@ static bool ShowAdvRelayDialog(HWND hParent) {
             g_ctx.custom_relay_host.clear();
             g_ctx.custom_relay_port = 0;
         }
+        SaveCustomRelay();  // 持久化到注册表, 重启后保留
     }
     return g_adv.confirmed;
 }
@@ -1706,8 +1760,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 // ========== 入口 ==========
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     // 单实例检测: 防止同一台电脑运行多个客户端
-    CreateMutexW(nullptr, TRUE, L"FileTransfer_Client_SingleInstance_Mutex");
+    HANDLE hMutex = CreateMutexW(nullptr, TRUE, L"FileTransfer_Client_SingleInstance_Mutex");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(hMutex);
         HWND existing = FindWindowW(L"FileTransferMainWindow", nullptr);
         if (existing) {
             ShowWindow(existing, SW_RESTORE);
@@ -1722,6 +1777,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     // 保存实例句柄 + 加载关闭行为偏好
     g_ctx.hInst = hInstance;
     g_ctx.close_action = LoadCloseAction();
+    LoadCustomRelay();
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (!ft::init_network()) {
