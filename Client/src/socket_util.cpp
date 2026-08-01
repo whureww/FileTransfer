@@ -38,6 +38,25 @@ std::string error_string(int code) {
 
 namespace detail {
 
+#ifdef _WIN32
+std::wstring utf8_to_wpath(const std::string& s) {
+    if (s.empty()) return {};
+    int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    if (len <= 0) return {};
+    std::wstring w(len, 0);
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], len);
+    return w;
+}
+static std::string wpath_to_utf8(const std::wstring& ws) {
+    if (ws.empty()) return {};
+    int len = WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), (int)ws.size(), nullptr, 0, nullptr, nullptr);
+    if (len <= 0) return {};
+    std::string s(len, 0);
+    WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), (int)ws.size(), &s[0], len, nullptr, nullptr);
+    return s;
+}
+#endif
+
 bool get_file_size(std::ifstream& in, uint64_t& size) {
     in.seekg(0, std::ios::end);
     std::streampos pos = in.tellg();
@@ -55,17 +74,29 @@ std::string basename(const std::string& path) {
 
 std::string normalize_dir(const std::string& dir, const ProgressCallback& cb) {
     namespace fs = std::filesystem;
+#ifdef _WIN32
+    fs::path p = dir.empty() ? fs::path(L".") : fs::path(utf8_to_wpath(dir));
+#else
     fs::path p = dir.empty() ? fs::path(".") : fs::path(dir);
+#endif
     std::error_code ec;
     fs::create_directories(p, ec);
     if (ec && !fs::is_directory(p)) {
         if (cb) cb(0, 0, "[警告] 创建输出目录失败: " + ec.message());
     }
+#ifdef _WIN32
+    std::wstring ws = p.wstring();
+    if (!ws.empty() && ws.back() != L'/' && ws.back() != L'\\') {
+        ws += fs::path::preferred_separator;
+    }
+    return wpath_to_utf8(ws);
+#else
     std::string s = p.string();
     if (!s.empty() && s.back() != '/' && s.back() != '\\') {
         s += fs::path::preferred_separator;
     }
     return s;
+#endif
 }
 
 bool send_all(socket_t sock, const char* buf, std::size_t len) {
@@ -151,17 +182,30 @@ std::string sanitize_filename(const std::string& name) {
 
 std::string unique_filepath(const std::string& dir, const std::string& filename) {
     namespace fs = std::filesystem;
+#ifdef _WIN32
+    fs::path base(utf8_to_wpath(dir));
+    base /= utf8_to_wpath(filename);
+    if (!fs::exists(base)) return wpath_to_utf8(base.wstring());
+    // 文件已存在: 追加 (1), (2) 等后缀
+    auto stem = fs::path(utf8_to_wpath(filename)).stem().wstring();
+    auto ext = fs::path(utf8_to_wpath(filename)).extension().wstring();
+    for (int i = 1; i < 10000; ++i) {
+        fs::path candidate = base.parent_path() / (stem + L" (" + std::to_wstring(i) + L")" + ext);
+        if (!fs::exists(candidate)) return wpath_to_utf8(candidate.wstring());
+    }
+    return wpath_to_utf8(base.wstring());  // fallback (极端情况)
+#else
     fs::path base(dir);
     base /= filename;
     if (!fs::exists(base)) return base.string();
-    // 文件已存在: 追加 (1), (2) 等后缀
     auto stem = fs::path(filename).stem().string();
     auto ext = fs::path(filename).extension().string();
     for (int i = 1; i < 10000; ++i) {
         fs::path candidate = base.parent_path() / (stem + " (" + std::to_string(i) + ")" + ext);
         if (!fs::exists(candidate)) return candidate.string();
     }
-    return base.string();  // fallback (极端情况)
+    return base.string();
+#endif
 }
 
 } // namespace detail

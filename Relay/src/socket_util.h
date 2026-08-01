@@ -28,6 +28,8 @@ constexpr socket_t INVALID_SOCK = INVALID_SOCKET;
 using socklen_t = int;
 inline int close_socket(socket_t s) { return ::closesocket(s); }
 inline int sock_errno() { return ::WSAGetLastError(); }
+// 将 UTF-8 路径转换为宽字符路径 (MSVC 的 ifstream/ofstream/filesystem 不支持 UTF-8)
+std::wstring utf8_to_wpath(const std::string& s);
 #else
 using socket_t = int;
 constexpr socket_t INVALID_SOCK = -1;

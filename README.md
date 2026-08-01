@@ -176,6 +176,7 @@ Ctrl+C 优雅退出
 **安全与健壮性修复（13 项）**
 
 高优先级：
+- 修复 Windows 下含中文/非 ASCII 字符的文件路径无法打开的问题：`std::ifstream`/`std::ofstream`/`std::filesystem` 在 MSVC 中不支持 UTF-8，新增 `utf8_to_wpath` 宽字符转换
 - 修复中继服务器 `handle_receiver` 的 Use-After-Free 崩溃：sender 线程超时清理 `delete room` 后，receiver 线程回滚时仍访问 room 指针
 - 全面对齐 ErrorCode 枚举与实际返回值（`file_transfer.cpp` × 2、`relay_client.cpp`，约 50 处），确保 `error_string()` 输出正确
 - 修复 LAN 接收端 `accept()` 阻塞导致取消按钮无效：改用 `select()` 200ms 轮询

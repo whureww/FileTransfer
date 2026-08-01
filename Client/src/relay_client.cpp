@@ -47,7 +47,11 @@ namespace ft {
 
 int relay_send_file(const std::string& relay_host, unsigned short relay_port,
                     const std::string& filepath, ProgressCallback cb) {
+#ifdef _WIN32
+    std::ifstream in(detail::utf8_to_wpath(filepath), std::ios::binary);
+#else
     std::ifstream in(filepath, std::ios::binary);
+#endif
     if (!in.is_open()) {
         report(cb, 0, 0, "[错误] 无法打开文件: " + filepath);
         return ERR_OPEN_FILE;
@@ -325,7 +329,11 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
     {
         namespace fs = std::filesystem;
         std::error_code ec;
+#ifdef _WIN32
+        fs::space_info si = fs::space(fs::path(detail::utf8_to_wpath(out_dir)), ec);
+#else
         fs::space_info si = fs::space(out_dir, ec);
+#endif
         if (!ec && si.available < hdr.file_size) {
             report(cb, 0, 0, "[错误] 磁盘空间不足: 需要 " + std::to_string(hdr.file_size) +
                            " 字节, 可用 " + std::to_string(si.available) + " 字节");
@@ -334,7 +342,11 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
         }
     }
 
+#ifdef _WIN32
+    std::ofstream out(detail::utf8_to_wpath(out_path), std::ios::binary | std::ios::trunc);
+#else
     std::ofstream out(out_path, std::ios::binary | std::ios::trunc);
+#endif
     if (!out.is_open()) {
         report(cb, 0, 0, "[错误] 无法创建输出文件: " + out_path);
         close_socket(sock);
