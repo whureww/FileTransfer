@@ -3,8 +3,8 @@
 #include <winres.h>
 1 ICON "..\\..\\assets\\app_icon.ico"
 1 VERSIONINFO
-FILEVERSION     0,0,5,0
-PRODUCTVERSION  0,0,5,0
+FILEVERSION     0,0,6,0
+PRODUCTVERSION  0,0,6,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          0x40004L
@@ -17,12 +17,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "FileTransfer"
             VALUE "FileDescription",  "FileTransfer Client - File transfer via LAN / room code"
-            VALUE "FileVersion",      "0.0.5.0"
+            VALUE "FileVersion",      "0.0.6.0"
             VALUE "InternalName",     "FileTransfer"
             VALUE "LegalCopyright",   "Copyright (C) 2026"
             VALUE "OriginalFilename", "FileTransfer.exe"
             VALUE "ProductName",      "FileTransfer Client"
-            VALUE "ProductVersion",   "0.0.5.0"
+            VALUE "ProductVersion",   "0.0.6.0"
         END
     END
     BLOCK "VarFileInfo"

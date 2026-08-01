@@ -85,7 +85,47 @@ struct RelayState {
     std::map<std::string, Room*> rooms;
     std::mt19937 rng{std::random_device{}()};
     std::atomic<int> active_connections{0};
+    // JOIN 速率限制: 记录每个 IP 的失败次数和首次失败时间
+    std::mutex rate_mtx;
+    std::map<std::string, std::pair<int, std::chrono::steady_clock::time_point>> join_failures;
+    // 工作线程列表 (用于优雅退出时 join)
+    std::mutex threads_mtx;
+    std::vector<std::thread> worker_threads;
+    std::atomic<bool> shutting_down{false};
 };
+
+// JOIN 速率限制: 每个 IP 在 60 秒内最多失败 5 次, 超过则拒绝
+bool check_join_rate_limit(RelayState& st, const std::string& ip) {
+    std::lock_guard<std::mutex> lk(st.rate_mtx);
+    auto now = std::chrono::steady_clock::now();
+    auto it = st.join_failures.find(ip);
+    if (it == st.join_failures.end()) {
+        st.join_failures[ip] = {0, now};
+        return true;
+    }
+    auto& [count, first_fail] = it->second;
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - first_fail).count();
+    if (elapsed >= 60) {
+        // 窗口过期, 重置
+        count = 0;
+        first_fail = now;
+        return true;
+    }
+    if (count >= 5) {
+        return false;  // 超过限制
+    }
+    return true;
+}
+
+void record_join_failure(RelayState& st, const std::string& ip) {
+    std::lock_guard<std::mutex> lk(st.rate_mtx);
+    auto it = st.join_failures.find(ip);
+    if (it == st.join_failures.end()) {
+        st.join_failures[ip] = {1, std::chrono::steady_clock::now()};
+    } else {
+        it->second.first++;
+    }
+}
 
 // 设置 socket 接收超时 (毫秒)
 void set_recv_timeout(socket_t sock, int timeout_ms) {
@@ -267,7 +307,8 @@ void handle_sender(RelayState& st, socket_t sock) {
 // 注意: room 的生命周期由 handle_sender 管理 (它创建并删除 room).
 //       本函数只设置 room->receiver 并发送 OK, 不删除 room.
 //       若失败, 仅设置 room->dead = true 通知 sender 清理.
-void handle_receiver(RelayState& st, socket_t sock, const std::string& first_line) {
+void handle_receiver(RelayState& st, socket_t sock, const std::string& first_line,
+                     const std::string& client_ip) {
     const std::string prefix = "JOIN ";
     if (first_line.size() <= prefix.size() ||
         first_line.compare(0, prefix.size(), prefix) != 0) {
@@ -281,6 +322,7 @@ void handle_receiver(RelayState& st, socket_t sock, const std::string& first_lin
 
     // 校验房间码格式 (长度 + 字符集: 与 gen_room_code 使用的字符集一致)
     if (code.size() != ROOM_CODE_LEN) {
+        record_join_failure(st, client_ip);
         send_line(sock, "ERROR invalid room code");
         close_socket(sock);
         return;
@@ -289,10 +331,19 @@ void handle_receiver(RelayState& st, socket_t sock, const std::string& first_lin
     for (char c : code) {
         if (!((c >= 'A' && c <= 'Z' && c != 'I' && c != 'O') ||
               (c >= '0' && c <= '9' && c != '0' && c != '1'))) {
+            record_join_failure(st, client_ip);
             send_line(sock, "ERROR invalid room code");
             close_socket(sock);
             return;
         }
+    }
+
+    // JOIN 速率限制: 防止暴力枚举房间码
+    if (!check_join_rate_limit(st, client_ip)) {
+        relay_log("JOIN 速率限制: " + client_ip + " 失败次数过多, 拒绝连接");
+        send_line(sock, "ERROR rate limited");
+        close_socket(sock);
+        return;
     }
 
     Room* room = nullptr;
@@ -300,7 +351,8 @@ void handle_receiver(RelayState& st, socket_t sock, const std::string& first_lin
         std::lock_guard<std::mutex> lk(st.mtx);
         auto it = st.rooms.find(code);
         if (it == st.rooms.end()) {
-            relay_log("JOIN " + code + ": 房间不存在");
+            relay_log("JOIN " + code + ": 房间不存在 (from " + client_ip + ")");
+            record_join_failure(st, client_ip);
             send_line(sock, "ERROR no such room");
             close_socket(sock);
             return;
@@ -349,7 +401,7 @@ void handle_receiver(RelayState& st, socket_t sock, const std::string& first_lin
 }
 
 // 接受连接的工作线程: 读首行, 分发
-void conn_thread(RelayState* st, socket_t sock) {
+void conn_thread(RelayState* st, socket_t sock, const std::string& client_ip) {
     // 设置 recv_line 超时, 防止 slowloris 攻击
     set_recv_timeout(sock, RELAY_RECV_TIMEOUT_MS);
 
@@ -362,7 +414,7 @@ void conn_thread(RelayState* st, socket_t sock) {
     if (line == "CREATE") {
         handle_sender(*st, sock);
     } else if (line.compare(0, 5, "JOIN ") == 0) {
-        handle_receiver(*st, sock, line);
+        handle_receiver(*st, sock, line, client_ip);
     } else {
         send_line(sock, "ERROR unknown command");
         close_socket(sock);
@@ -452,17 +504,25 @@ int run_relay_server(unsigned short port) {
             continue;
         }
 
-        // 记录连接来源 IP (便于排查异常连接)
+        // 记录连接来源 IP (便于排查异常连接 + JOIN 速率限制)
         char ip_buf[64] = {0};
         ::inet_ntop(AF_INET, &client.sin_addr, ip_buf, sizeof(ip_buf));
+        std::string client_ip(ip_buf);
         relay_log(std::string("新连接 from ") + ip_buf + ":" + std::to_string(::ntohs(client.sin_port)) +
                   " (当前连接数: " + std::to_string(current + 1) + ")");
-        std::thread(conn_thread, &st, conn).detach();
+        st.worker_threads.emplace_back(conn_thread, &st, conn, client_ip);
     }
 
-    // 优雅退出: 关闭监听 socket
-    relay_log("中继服务器正在关闭...");
+    // 优雅退出: 标记关闭, join 所有工作线程, 防止 UAF
+    st.shutting_down.store(true);
+    relay_log("中继服务器正在关闭, 等待工作线程退出...");
     close_socket(listen_sock);
+    {
+        std::lock_guard<std::mutex> lk(st.threads_mtx);
+        for (auto& t : st.worker_threads) {
+            if (t.joinable()) t.join();
+        }
+    }
     relay_log("中继服务器已停止");
     return 0;
 }

@@ -46,6 +46,9 @@ namespace ft {
 
 // ===== 二进制帧协议实现 =====
 
+// 单帧 payload 最大长度 (与 BUFFER_SIZE 一致, 防止恶意方声明超大帧导致内存耗尽)
+constexpr uint32_t MAX_FRAME_PAYLOAD = static_cast<uint32_t>(BUFFER_SIZE);
+
 #pragma pack(push, 1)
 struct FrameHeader {
     uint8_t type;
@@ -68,6 +71,8 @@ bool read_frame(socket_t sock, uint8_t& type_out,
     if (!recv_all(sock, reinterpret_cast<char*>(&hdr), sizeof(hdr))) return false;
     type_out = hdr.type;
     len_out = hdr.length;
+    // 安全校验: 拒绝超大帧 (防内存耗尽 DoS)
+    if (hdr.length > MAX_FRAME_PAYLOAD) return false;
     data_out.clear();
     if (hdr.length > 0) {
         data_out.resize(hdr.length);

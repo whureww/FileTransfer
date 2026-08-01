@@ -399,6 +399,14 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
             break;
         }
         if (frame_type == FRAME_DATA) {
+            // 安全校验: 防止发送方发送超出声明大小的数据 (磁盘填满攻击)
+            if (received + frame_len > hdr.file_size) {
+                report(cb, 0, 0, "[错误] 接收数据超出声明的文件大小, 可能存在攻击");
+                out.close();
+                std::remove(out_path.c_str());
+                close_socket(sock);
+                return ERR_RECV_DATA;
+            }
             out.write(frame_data.data(), frame_len);
             if (!out) {
                 report(cb, 0, 0, "[错误] 写入文件失败");

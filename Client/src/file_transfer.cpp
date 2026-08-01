@@ -46,6 +46,9 @@ namespace ft {
 
 // ===== 二进制帧协议实现 =====
 
+// 单帧 payload 最大长度 (与 BUFFER_SIZE 一致, 防止恶意方声明超大帧导致内存耗尽)
+constexpr uint32_t MAX_FRAME_PAYLOAD = static_cast<uint32_t>(BUFFER_SIZE);
+
 #pragma pack(push, 1)
 struct FrameHeader {
     uint8_t type;       // 帧类型 (FRAME_DATA/CANCEL/DONE)
@@ -68,6 +71,8 @@ bool read_frame(socket_t sock, uint8_t& type_out,
     if (!recv_all(sock, reinterpret_cast<char*>(&hdr), sizeof(hdr))) return false;
     type_out = hdr.type;
     len_out = hdr.length;
+    // 安全校验: 拒绝超大帧 (防内存耗尽 DoS)
+    if (hdr.length > MAX_FRAME_PAYLOAD) return false;
     data_out.clear();
     if (hdr.length > 0) {
         data_out.resize(hdr.length);
@@ -379,6 +384,15 @@ int recv_file(unsigned short port, const std::string& output_dir,
             break;
         }
         if (frame_type == FRAME_DATA) {
+            // 安全校验: 防止发送方发送超出声明大小的数据 (磁盘填满攻击)
+            if (received + frame_len > hdr.file_size) {
+                report(cb, 0, 0, "[错误] 接收数据超出声明的文件大小, 可能存在攻击");
+                out.close();
+                std::remove(out_path.c_str());
+                close_socket(conn);
+                close_socket(listen_sock);
+                return ERR_RECV_DATA;
+            }
             out.write(frame_data.data(), frame_len);
             if (!out) {
                 report(cb, 0, 0, "[错误] 写入文件失败");
