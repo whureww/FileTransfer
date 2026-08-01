@@ -2,7 +2,7 @@
 
 跨平台文件传输工具，支持局域网直连和中继服务器转发两种模式。
 
-**当前版本：v0.0.2**
+**当前版本：v0.0.3**
 
 ## 功能特性
 
@@ -168,6 +168,48 @@ Ctrl+C 优雅退出
 - **构建**：CMake 3.15+
 - **安装器**：Inno Setup 7
 - **运行时依赖**：MSVCP140.dll, VCRUNTIME140.dll, VCRUNTIME140_1.dll (动态链接 CRT)
+
+## 更新日志
+
+### v0.0.3 (2026-08-01)
+
+**安全与健壮性修复（13 项）**
+
+高优先级：
+- 修复中继服务器 `handle_receiver` 的 Use-After-Free 崩溃：sender 线程超时清理 `delete room` 后，receiver 线程回滚时仍访问 room 指针
+- 全面对齐 ErrorCode 枚举与实际返回值（`file_transfer.cpp` × 2、`relay_client.cpp`，约 50 处），确保 `error_string()` 输出正确
+- 修复 LAN 接收端 `accept()` 阻塞导致取消按钮无效：改用 `select()` 200ms 轮询
+- 修复客户端单实例 Mutex 未 `CloseHandle` 的句柄泄漏
+
+中优先级：
+- 自定义中继服务器设置持久化到注册表，重启后保留配置
+- 中继服务器 JOIN 时校验房间码字符集（A-Z 排除 I/O，2-9 排除 0/1），与生成端一致
+- 中继发送方等待 PEER 期间支持取消（`select` 200ms 轮询替代阻塞 `recv_line`）
+- `sanitize_filename` 补全 Windows 保留设备名过滤（COM10+、LPT10+、CONIN$、CONOUT$）
+
+低优先级：
+- `post_progress` 节流时间戳从 `static` 改为 `AppContext` 成员，消除多线程隐患
+- 修复 `.gitignore` 误排除 `installer/*.iss` 模板文件
+- 添加 `installer/Client.iss` 和 `installer/Relay.iss` 到版本控制
+
+### v0.0.2 (2026-08-01)
+
+- 客户端高级设置：自定义中继服务器 IP 和端口，接收端自动沿用
+- 单实例检测：每台设备仅允许运行一个客户端/中继服务器
+- 中继服务器增强：连接数/房间数限制、传输超时、数据量上限、线程安全日志
+- 文件安全：磁盘空间预检、唯一文件路径（不覆盖同名文件）
+- 协议增强：PacketHeader 增加 version 字段、ErrorCode 枚举替代魔法数字
+- 进度回调节流（100ms），防止大文件传输时 UI 卡顿
+- 关闭窗口对话框（最小化到托盘 / 退出 / 记住选择）
+- Inno Setup 安装器打包
+
+### v0.0.1 (2026-08-01)
+
+- 初始版本
+- 局域网直连文件传输（UDP 自动发现 + TCP 传输）
+- 中继服务器转发（6 位房间码配对）
+- Win32 GUI 客户端（进度条、日志、拖拽选择文件）
+- 跨平台编译支持（CMake + MSVC/GCC/Clang）
 
 ## 许可证
 

@@ -1358,7 +1358,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         // 标题
         g_ctx.hTitle = CreateCtrl(hWnd, L"static",
-                   L"FileTransfer v0.0.2  -  文件传输 (局域网 / 房间码中继)",
+                   L"FileTransfer v0.0.3  -  文件传输 (局域网 / 房间码中继)",
                    SS_CENTER, 0, 0, 10, 10, 0);
 
         // ===== 模式选择区 =====
@@ -1804,7 +1804,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     AdjustWindowRectEx(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0);
 
     g_ctx.hwnd = CreateWindowExW(
-        0, cls_name, L"FileTransfer v0.0.2 - 文件传输",
+        0, cls_name, L"FileTransfer v0.0.3 - 文件传输",
         WS_OVERLAPPEDWINDOW,  // 完整窗口样式: 可调整大小、可最大化
         CW_USEDEFAULT, CW_USEDEFAULT,
         rc.right - rc.left, rc.bottom - rc.top,
