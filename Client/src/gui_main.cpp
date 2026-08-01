@@ -1705,6 +1705,17 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 
 // ========== 入口 ==========
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
+    // 单实例检测: 防止同一台电脑运行多个客户端
+    CreateMutexW(nullptr, TRUE, L"FileTransfer_Client_SingleInstance_Mutex");
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        HWND existing = FindWindowW(L"FileTransferMainWindow", nullptr);
+        if (existing) {
+            ShowWindow(existing, SW_RESTORE);
+            SetForegroundWindow(existing);
+        }
+        return 0;
+    }
+
     // 启用 DPI 感知, 避免高 DPI 屏幕上控件错位/遮挡
     SetProcessDPIAware();
 

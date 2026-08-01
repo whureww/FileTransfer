@@ -33,6 +33,14 @@ static void signal_handler(int sig) {
 int main(int argc, char** argv) {
     enable_utf8_console();
 
+    // 单实例检测: 防止同一台电脑运行多个中继服务器
+    HANDLE hMutex = CreateMutexW(nullptr, TRUE, L"FileTransfer_Relay_SingleInstance_Mutex");
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        std::cerr << "[错误] 中继服务器已在运行, 请勿重复启动\n";
+        CloseHandle(hMutex);
+        return 1;
+    }
+
     // 注册信号处理 (Ctrl+C 优雅退出)
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
