@@ -141,8 +141,8 @@ fun TransferScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // ===== 扫码接收按钮 (仅在接收标签显示) =====
-            if (transferMode == TransferMode.RECV) {
+            // ===== 扫码接收按钮 (仅在房间码中继模式 + 接收标签显示) =====
+            if (transferMode == TransferMode.RECV && connMode == ConnMode.RELAY) {
                 OutlinedButton(
                     onClick = onScan,
                     modifier = Modifier.fillMaxWidth(),

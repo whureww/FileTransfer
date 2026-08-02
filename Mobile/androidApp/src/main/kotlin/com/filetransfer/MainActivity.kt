@@ -76,17 +76,31 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 初始化默认保存目录: app 外部专用目录/files/received/
-        defaultSaveDir = File(getExternalFilesDir(null), "received").apply {
-            if (!exists()) mkdirs()
+        // 初始化默认保存目录:
+        // 优先使用公共目录 /storage/emulated/0/FileTransfer/received/ (用户可通过文件管理器直接访问)
+        // 无权限时回退到 app 专用目录 /Android/data/com.filetransfer/files/received/
+        val publicDir = File(Environment.getExternalStorageDirectory(), "FileTransfer/received")
+        defaultSaveDir = if (publicDir.exists() || publicDir.mkdirs()) {
+            publicDir
+        } else {
+            // 公共目录创建失败 (无 MANAGE_EXTERNAL_STORAGE 权限), 回退到 app 专用目录
+            File(getExternalFilesDir(null), "received").apply { if (!exists()) mkdirs() }
         }
 
         transferService = TransferService().apply {
             saveDir = defaultSaveDir.absolutePath
         }
 
-        // 请求文件访问权限 (Android 11+ 需要 MANAGE_EXTERNAL_STORAGE)
+        // 请求文件访问权限 (Android 11+ 需要 MANAGE_EXTERNAL_STORAGE, 用于公共目录写入)
         requestStoragePermission()
+
+        // 权限授予后, 如果之前回退到了 app 专用目录, 尝试切换到公共目录
+        if (defaultSaveDir != publicDir && Environment.isExternalStorageManager()) {
+            if (publicDir.exists() || publicDir.mkdirs()) {
+                defaultSaveDir = publicDir
+                transferService.saveDir = publicDir.absolutePath
+            }
+        }
 
         setContent {
             FileTransferTheme {

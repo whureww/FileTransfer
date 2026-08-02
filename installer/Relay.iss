@@ -6,7 +6,7 @@
 #define MyAppName      "FileTransfer 中继端"
 #define MyAppExeName   "FileTransferRelay.exe"
 #define MyAppPublisher "FileTransfer"
-#define MyAppVersion   "0.0.8"
+#define MyAppVersion   "0.0.9"
 #define MyAppId        "FileTransferRelay_8F3A2C1D-5E6B-4C2D-9A1E-7F8B9C0D1E2F"
 
 ; ------------------------- Setup ----------------------------

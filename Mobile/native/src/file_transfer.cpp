@@ -603,11 +603,86 @@ int connect_recv(const std::string& ip, unsigned short port,
         return CANCELED;
     }
 
-    if (::connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == -1) {
-        report(cb, 0, 0, "[错误] 连接失败, errno=" + std::to_string(sock_errno()));
-        close_socket(sock);
-        return ERR_CONNECT;
+    // 非阻塞连接: 在等待 connect 完成期间能周期性检查取消标志 (避免阻塞 ~120 秒)
+#ifdef _WIN32
+    u_long nb_mode = 1;
+    ::ioctlsocket(sock, FIONBIO, &nb_mode);
+#else
+    int orig_flags = ::fcntl(sock, F_GETFL, 0);
+    ::fcntl(sock, F_SETFL, orig_flags | O_NONBLOCK);
+#endif
+
+    int cret = ::connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+    if (cret == -1) {
+        int e = sock_errno();
+#ifdef _WIN32
+        bool in_progress = (e == WSAEWOULDBLOCK);
+#else
+        bool in_progress = (e == EINPROGRESS);
+#endif
+        if (!in_progress) {
+            report(cb, 0, 0, "[错误] 连接失败, errno=" + std::to_string(e)
+                   + "。请确认: 1) PC 端已生成二维码; 2) 手机与 PC 在同一局域网; "
+                   "3) PC 防火墙未拦截端口 " + std::to_string(port));
+            close_socket(sock);
+            return ERR_CONNECT;
+        }
+        // 连接进行中: 用 select 轮询可写状态 (每 200ms 检查一次取消)
+        auto t0 = std::chrono::steady_clock::now();
+        while (true) {
+            fd_set wset;
+            FD_ZERO(&wset);
+            FD_SET(sock, &wset);
+            timeval tv{0, 200 * 1000};
+#ifdef _WIN32
+            int sel = ::select(0, nullptr, &wset, nullptr, &tv);
+#else
+            int sel = ::select(sock + 1, nullptr, &wset, nullptr, &tv);
+#endif
+            if (sel == 0) {
+                // 超时: 检查取消 + 整体超时保护 (30 秒仍未连上则失败)
+                if (!report(cb, 0, 0, "")) {
+                    close_socket(sock);
+                    return CANCELED;
+                }
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::steady_clock::now() - t0).count();
+                if (elapsed >= 30) {
+                    report(cb, 0, 0, "[错误] 连接超时 (30 秒未连上)。请确认: "
+                           "1) PC 端已生成二维码; 2) 手机与 PC 在同一局域网; "
+                           "3) PC 防火墙未拦截端口 " + std::to_string(port));
+                    close_socket(sock);
+                    return ERR_CONNECT;
+                }
+                continue;
+            }
+            if (sel < 0) {
+                report(cb, 0, 0, "[错误] select 失败, errno=" + std::to_string(sock_errno()));
+                close_socket(sock);
+                return ERR_CONNECT;
+            }
+            // 可写: 通过 SO_ERROR 判断连接是否真正成功
+            int soerr = 0;
+            socklen_t sl = sizeof(soerr);
+            if (::getsockopt(sock, SOL_SOCKET, SO_ERROR,
+                             reinterpret_cast<char*>(&soerr), &sl) != 0 || soerr != 0) {
+                report(cb, 0, 0, "[错误] 连接失败, errno=" + std::to_string(soerr)
+                       + "。请确认: 1) PC 端已生成二维码; 2) 手机与 PC 在同一局域网; "
+                       "3) PC 防火墙未拦截端口 " + std::to_string(port));
+                close_socket(sock);
+                return ERR_CONNECT;
+            }
+            break;  // 连接成功
+        }
     }
+
+    // 恢复阻塞模式 (后续 recv_all/send_all 依赖阻塞语义)
+#ifdef _WIN32
+    u_long blk_mode = 0;
+    ::ioctlsocket(sock, FIONBIO, &blk_mode);
+#else
+    ::fcntl(sock, F_SETFL, orig_flags);
+#endif
 
     // 读取协议头
     PacketHeader hdr{};

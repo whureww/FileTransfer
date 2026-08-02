@@ -485,7 +485,17 @@ int serve_file(unsigned short port, const std::string& filepath, ProgressCallbac
         return ERR_LISTEN;
     }
 
-    if (!report(cb, 0, 0, "[信息] 等待手机连接, 端口 " + std::to_string(port))) {
+    // 确认监听已就绪 (复核实际绑定的端口, 证明 bind/listen 成功)
+    {
+        sockaddr_in bound{};
+        socklen_t blen = sizeof(bound);
+        if (::getsockname(listen_sock, reinterpret_cast<sockaddr*>(&bound), &blen) == 0) {
+            report(cb, 0, 0, "[信息] 服务已启动, 监听端口 "
+                   + std::to_string(::ntohs(bound.sin_port)) + " (bind/listen 成功)");
+        }
+    }
+
+    if (!report(cb, 0, 0, "[信息] 等待手机扫码连接...")) {
         close_socket(listen_sock);
         return CANCELED;
     }
