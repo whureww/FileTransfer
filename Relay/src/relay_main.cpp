@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    std::cout << "FileTransferRelay v0.0.7\n";
+    std::cout << "FileTransferRelay v0.0.8\n";
     std::cout << "用法: 两端均连接本服务, 发送方创建房间得到 6 位房间码,\n";
     std::cout << "      将房间码告知接收方即可进行文件传输 (跨局域网)\n";
     std::cout << "默认端口: " << ft::DEFAULT_RELAY_PORT

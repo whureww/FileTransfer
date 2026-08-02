@@ -71,7 +71,7 @@ fun TransferScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("FileTransfer v0.0.7") },
+                title = { Text("FileTransfer v0.0.8") },
                 actions = {
                     if (connMode == ConnMode.RELAY) {
                         IconButton(

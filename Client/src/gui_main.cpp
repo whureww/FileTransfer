@@ -1367,7 +1367,7 @@ static bool get_effective_relay_addr(std::string& host, unsigned short& port) {
 // QR 内容格式: FT1|R|relay_host|port|room_code
 static HBITMAP GenerateQrBitmap(const std::string& text, int pixel_size, int& out_size) {
     using namespace qrcodegen;
-    QrCode qr = QrCode::encodeText(text.c_str(), Ecc::MEDIUM);
+    QrCode qr = QrCode::encodeText(text.c_str(), QrCode::Ecc::MEDIUM);
     int modules = qr.getSize();
     int border = 4;  // QR 规范要求 4 模块白边
     int total = (modules + border * 2) * pixel_size;
@@ -1534,7 +1534,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         // 标题
         g_ctx.hTitle = CreateCtrl(hWnd, L"static",
-                   L"FileTransfer v0.0.7  -  文件传输 (局域网 / 房间码中继)",
+                   L"FileTransfer v0.0.8  -  文件传输 (局域网 / 房间码中继)",
                    SS_CENTER, 0, 0, 10, 10, 0);
 
         // ===== 模式选择区 =====
@@ -2027,7 +2027,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     AdjustWindowRectEx(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0);
 
     g_ctx.hwnd = CreateWindowExW(
-        0, cls_name, L"FileTransfer v0.0.7 - 文件传输",
+        0, cls_name, L"FileTransfer v0.0.8 - 文件传输",
         WS_OVERLAPPEDWINDOW,  // 完整窗口样式: 可调整大小、可最大化
         CW_USEDEFAULT, CW_USEDEFAULT,
         rc.right - rc.left, rc.bottom - rc.top,

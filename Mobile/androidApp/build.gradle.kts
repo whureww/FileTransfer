@@ -13,7 +13,7 @@ android {
         minSdk = 24
         targetSdk = 34
         versionCode = 1
-        versionName = "0.0.7"
+        versionName = "0.0.8"
         
         // NDK 配置: 编译 C++ 核心库 (libfiletransfer_native.so)
         externalNativeBuild {

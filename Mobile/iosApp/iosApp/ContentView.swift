@@ -12,7 +12,7 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 20) {
-                Text("FileTransfer v0.0.7")
+                Text("FileTransfer v0.0.8")
                     .font(.title2)
                     .fontWeight(.bold)
 
