@@ -232,12 +232,22 @@ private fun LanSendPanel(
 
             Spacer(Modifier.height(8.dp))
 
-            Button(
-                onClick = onStart,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = filePath.isNotEmpty() && state !is TransferState.Connecting &&
-                    state !is TransferState.Transferring
-            ) { Text("发送") }
+            // 开始按钮在传输中变为取消按钮
+            if (state is TransferState.Connecting || state is TransferState.Transferring) {
+                Button(
+                    onClick = onCancel,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text("取消") }
+            } else {
+                Button(
+                    onClick = onStart,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = filePath.isNotEmpty()
+                ) { Text("发送") }
+            }
 
             TransferStateView(state, onCancel, onReset)
         }
@@ -271,12 +281,21 @@ private fun LanRecvPanel(
 
             Spacer(Modifier.height(8.dp))
 
-            Button(
-                onClick = onStart,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = state !is TransferState.Connecting &&
-                    state !is TransferState.Transferring
-            ) { Text("开始接收") }
+            // 开始按钮在传输中变为取消按钮
+            if (state is TransferState.Connecting || state is TransferState.Transferring) {
+                Button(
+                    onClick = onCancel,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text("取消") }
+            } else {
+                Button(
+                    onClick = onStart,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("开始接收") }
+            }
 
             TransferStateView(state, onCancel, onReset)
         }
@@ -316,13 +335,23 @@ private fun RelaySendPanel(
 
             Spacer(Modifier.height(8.dp))
 
-            Button(
-                onClick = onStart,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = filePath.isNotEmpty() && state !is TransferState.Connecting &&
-                    state !is TransferState.Transferring &&
-                    state !is TransferState.WaitingForPeer
-            ) { Text("创建房间并发送") }
+            // 开始按钮在传输中变为取消按钮 (含等待对方加入)
+            if (state is TransferState.Connecting || state is TransferState.Transferring ||
+                state is TransferState.WaitingForPeer) {
+                Button(
+                    onClick = onCancel,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text("取消") }
+            } else {
+                Button(
+                    onClick = onStart,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = filePath.isNotEmpty()
+                ) { Text("创建房间并发送") }
+            }
 
             TransferStateView(state, onCancel, onReset)
         }
@@ -360,12 +389,22 @@ private fun RelayRecvPanel(
 
             Spacer(Modifier.height(8.dp))
 
-            Button(
-                onClick = onStart,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = roomCode.length == 6 && state !is TransferState.Connecting &&
-                    state !is TransferState.Transferring
-            ) { Text("加入房间并接收") }
+            // 开始按钮在传输中变为取消按钮
+            if (state is TransferState.Connecting || state is TransferState.Transferring) {
+                Button(
+                    onClick = onCancel,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text("取消") }
+            } else {
+                Button(
+                    onClick = onStart,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = roomCode.length == 6
+                ) { Text("加入房间并接收") }
+            }
 
             TransferStateView(state, onCancel, onReset)
         }
@@ -384,43 +423,31 @@ private fun TransferStateView(
         is TransferState.Idle -> {}
 
         is TransferState.Connecting -> {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Text("正在连接...")
-                }
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
-                    Text("取消")
-                }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                Spacer(Modifier.width(12.dp))
+                Text("正在连接...")
             }
         }
 
         is TransferState.WaitingForPeer -> {
-            Column {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer
-                    )
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Column(
-                        modifier = Modifier.padding(20.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text("房间码", fontSize = 14.sp)
-                        Text(
-                            state.roomCode,
-                            fontSize = 40.sp,
-                            letterSpacing = 6.sp
-                        )
-                        Text("将此房间码告知接收方", style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
-                    Text("取消")
+                    Text("房间码", fontSize = 14.sp)
+                    Text(
+                        state.roomCode,
+                        fontSize = 40.sp,
+                        letterSpacing = 6.sp
+                    )
+                    Text("将此房间码告知接收方", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -437,7 +464,6 @@ private fun TransferStateView(
             if (state.message.isNotEmpty()) {
                 Text(state.message, style = MaterialTheme.typography.bodySmall)
             }
-            Button(onClick = onCancel) { Text("取消传输") }
         }
 
         is TransferState.Done -> {
