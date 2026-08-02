@@ -33,6 +33,7 @@ inline int sock_errno() { return ::WSAGetLastError(); }
 // 将 UTF-8 路径转换为宽字符路径 (MSVC 的 ifstream/ofstream/filesystem 不支持 UTF-8)
 std::wstring utf8_to_wpath(const std::string& s);
 #else
+using socklen_t = ::socklen_t;
 inline int close_socket(socket_t s) { return ::close(s); }
 inline int sock_errno() { return errno; }
 #endif

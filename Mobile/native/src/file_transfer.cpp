@@ -244,7 +244,7 @@ int recv_file(unsigned short port, const std::string& output_dir,
 
     // 使用 select 轮询 accept, 以便用户取消时能及时退出 (每 200ms 检查一次 cancel)
     sockaddr_in client_addr{};
-    int client_len = sizeof(client_addr);
+    socklen_t client_len = sizeof(client_addr);
     socket_t conn = INVALID_SOCK;
     while (conn == INVALID_SOCK) {
         fd_set rfds;
@@ -532,7 +532,7 @@ std::thread start_discovery_responder(unsigned short tcp_port,
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = INADDR_ANY;
         addr.sin_port = htons(DISCOVERY_PORT);
-        if (::bind(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR) {
+        if (::bind(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == -1) {
             close_socket(sock);
             return;
         }
