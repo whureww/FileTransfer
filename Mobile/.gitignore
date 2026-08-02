@@ -5,6 +5,7 @@ build_new/
 captures/
 .externalNativeBuild/
 cxx/
+.kotlin/
 
 # IDE
 .idea/
@@ -36,3 +37,4 @@ CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 Makefile
+.cxx/

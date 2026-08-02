@@ -8,22 +8,23 @@ kotlin {
         compilations.all {
             kotlinOptions {
                 jvmTarget = "17"
+                freeCompilerArgs += "-Xexpect-actual-classes"
             }
         }
     }
     
-    iosX64()
-    iosArm64()
-    iosSimulatorArm64()
-    
-    listOf(
-        iosX64(),
-        iosArm64(),
-        iosSimulatorArm64()
-    ).forEach { iosTarget ->
-        iosTarget.binaries.framework {
-            baseName = "Shared"
-            isStatic = true
+    // iOS 仅在 macOS 上编译
+    if (System.getenv("OS")?.lowercase()?.contains("mac") == true ||
+        System.getProperty("os.name")?.lowercase()?.contains("mac") == true) {
+        listOf(
+            iosX64(),
+            iosArm64(),
+            iosSimulatorArm64()
+        ).forEach { iosTarget ->
+            iosTarget.binaries.framework {
+                baseName = "Shared"
+                isStatic = true
+            }
         }
     }
     

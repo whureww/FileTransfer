@@ -1,21 +1,28 @@
 package com.filetransfer.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.filetransfer.model.TransferMode
 import com.filetransfer.model.TransferState
 import com.filetransfer.service.TransferService
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TransferScreen(service: TransferService) {
+fun TransferScreen(
+    service: TransferService,
+    onPickFile: () -> Unit = {}
+) {
     val state by service.state.collectAsState()
     var mode by remember { mutableStateOf(TransferMode.SEND) }
     var filePath by remember { mutableStateOf("") }
@@ -23,79 +30,86 @@ fun TransferScreen(service: TransferService) {
     var relayHost by remember { mutableStateOf(service.relayHost) }
     var relayPort by remember { mutableStateOf(service.relayPort.toString()) }
 
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = "FileTransfer v0.0.7",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 24.dp)
-        )
-
-        // 模式切换
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterChip(
-                selected = mode == TransferMode.SEND,
-                onClick = { mode = TransferMode.SEND },
-                label = { Text("发送") },
-                modifier = Modifier.weight(1f)
-            )
-            FilterChip(
-                selected = mode == TransferMode.RECV,
-                onClick = { mode = TransferMode.RECV },
-                label = { Text("接收") },
-                modifier = Modifier.weight(1f)
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("FileTransfer v0.0.7") }
             )
         }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // 模式切换
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = mode == TransferMode.SEND,
+                    onClick = { mode = TransferMode.SEND },
+                    label = { Text("发送") },
+                    modifier = Modifier.weight(1f)
+                )
+                FilterChip(
+                    selected = mode == TransferMode.RECV,
+                    onClick = { mode = TransferMode.RECV },
+                    label = { Text("接收") },
+                    modifier = Modifier.weight(1f)
+                )
+            }
 
-        Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-        // 中继服务器配置
-        OutlinedTextField(
-            value = relayHost,
-            onValueChange = {
-                relayHost = it
-                service.relayHost = it
-            },
-            label = { Text("中继服务器地址") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = relayPort,
-            onValueChange = {
-                relayPort = it
-                it.toIntOrNull()?.let { p -> service.relayPort = p }
-            },
-            label = { Text("中继端口") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        when (mode) {
-            TransferMode.SEND -> SendPanel(
-                state = state,
-                filePath = filePath,
-                onFilePathChange = { filePath = it },
-                onStart = { service.sendFile(filePath) },
-                onCancel = { service.cancel() },
-                onReset = { service.reset() }
+            // 中继服务器配置
+            OutlinedTextField(
+                value = relayHost,
+                onValueChange = {
+                    relayHost = it
+                    service.relayHost = it
+                },
+                label = { Text("中继服务器地址") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
             )
-            TransferMode.RECV -> RecvPanel(
-                state = state,
-                roomCode = roomCode,
-                onRoomCodeChange = { roomCode = it },
-                onStart = { service.recvFile(roomCode, "/storage/emulated/0/Download") },
-                onCancel = { service.cancel() },
-                onReset = { service.reset() }
+            OutlinedTextField(
+                value = relayPort,
+                onValueChange = {
+                    relayPort = it
+                    it.toIntOrNull()?.let { p -> service.relayPort = p }
+                },
+                label = { Text("中继端口") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth()
             )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            when (mode) {
+                TransferMode.SEND -> SendPanel(
+                    state = state,
+                    filePath = filePath,
+                    onFilePathChange = { filePath = it },
+                    onPickFile = onPickFile,
+                    onStart = { service.sendFile(filePath) },
+                    onCancel = { service.cancel() },
+                    onReset = { service.reset() }
+                )
+                TransferMode.RECV -> RecvPanel(
+                    state = state,
+                    roomCode = roomCode,
+                    onRoomCodeChange = { roomCode = it },
+                    onStart = { service.recvFile(roomCode, getSaveDir()) },
+                    onCancel = { service.cancel() },
+                    onReset = { service.reset() }
+                )
+            }
         }
     }
 }
@@ -105,20 +119,50 @@ private fun SendPanel(
     state: TransferState,
     filePath: String,
     onFilePathChange: (String) -> Unit,
+    onPickFile: () -> Unit,
     onStart: () -> Unit,
     onCancel: () -> Unit,
     onReset: () -> Unit
 ) {
+    // 文件选择按钮
+    OutlinedButton(
+        onClick = onPickFile,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Icon(Icons.Default.AttachFile, contentDescription = null)
+        Spacer(Modifier.width(8.dp))
+        Text("选择文件")
+    }
+
+    if (filePath.isNotEmpty()) {
+        Text(
+            text = "已选择: $filePath",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
     OutlinedTextField(
         value = filePath,
         onValueChange = onFilePathChange,
-        label = { Text("文件路径") },
+        label = { Text("文件路径 (或手动输入)") },
         modifier = Modifier.fillMaxWidth()
     )
+
     Spacer(modifier = Modifier.height(8.dp))
-    Button(onClick = onStart, modifier = Modifier.fillMaxWidth()) {
+
+    Button(
+        onClick = onStart,
+        modifier = Modifier.fillMaxWidth(),
+        enabled = filePath.isNotEmpty() && state !is TransferState.Connecting &&
+                  state !is TransferState.Transferring &&
+                  state !is TransferState.WaitingForPeer
+    ) {
         Text("开始发送")
     }
+
     TransferStateView(state, onCancel, onReset)
 }
 
@@ -137,12 +181,24 @@ private fun RecvPanel(
         label = { Text("输入 6 位房间码") },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth(),
+        textStyle = androidx.compose.ui.text.TextStyle(
+            fontSize = 24.sp,
+            letterSpacing = 4.sp
+        )
     )
+
     Spacer(modifier = Modifier.height(8.dp))
-    Button(onClick = onStart, modifier = Modifier.fillMaxWidth()) {
+
+    Button(
+        onClick = onStart,
+        modifier = Modifier.fillMaxWidth(),
+        enabled = roomCode.length == 6 && state !is TransferState.Connecting &&
+                  state !is TransferState.Transferring
+    ) {
         Text("开始接收")
     }
+
     TransferStateView(state, onCancel, onReset)
 }
 
@@ -207,6 +263,10 @@ private fun TransferStateView(
             Button(onClick = onReset) { Text("返回") }
         }
     }
+}
+
+private fun getSaveDir(): String {
+    return "/storage/emulated/0/Download"
 }
 
 // 格式化字节数
