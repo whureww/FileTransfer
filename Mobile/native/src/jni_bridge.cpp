@@ -56,32 +56,36 @@ static bool jni_progress_callback(uint64_t done, uint64_t total,
 
 // ===== JNI 导出函数 =====
 // 命名规则: Java_包名_类名_方法名 (对应 com.filetransfer.protocol.NativeBridge)
+// 方法名必须与 Kotlin external 声明的方法名完全一致
 
 extern "C" {
 
 // 初始化网络 (Windows 需要 WSAStartup, Android/iOS 无需操作)
+// Kotlin: external fun initNetworkNative(): Boolean
 JNIEXPORT jboolean JNICALL
-Java_com_filetransfer_protocol_NativeBridge_initNetwork(JNIEnv* env, jobject thiz) {
+Java_com_filetransfer_protocol_NativeBridge_initNetworkNative(JNIEnv* env, jobject thiz) {
     return ft::init_network() ? JNI_TRUE : JNI_FALSE;
 }
 
 // 清理网络资源
+// Kotlin: external fun cleanupNetworkNative()
 JNIEXPORT void JNICALL
-Java_com_filetransfer_protocol_NativeBridge_cleanupNetwork(JNIEnv* env, jobject thiz) {
+Java_com_filetransfer_protocol_NativeBridge_cleanupNetworkNative(JNIEnv* env, jobject thiz) {
     ft::cleanup_network();
 }
 
 // 错误码转文本
+// Kotlin: external fun errorStringNative(code: Int): String
 JNIEXPORT jstring JNICALL
-Java_com_filetransfer_protocol_NativeBridge_errorString(JNIEnv* env, jobject thiz, jint code) {
+Java_com_filetransfer_protocol_NativeBridge_errorStringNative(JNIEnv* env, jobject thiz, jint code) {
     std::string msg = ft::error_string(code);
     return env->NewStringUTF(msg.c_str());
 }
 
 // 中继发送文件
-// Kotlin: relaySendFile(host: String, port: Int, filePath: String, callback: ProgressCallback): Int
+// Kotlin: external fun relaySendFileNative(host: String, port: Int, filePath: String, callback: ProgressCallback): Int
 JNIEXPORT jint JNICALL
-Java_com_filetransfer_protocol_NativeBridge_relaySendFile(
+Java_com_filetransfer_protocol_NativeBridge_relaySendFileNative(
     JNIEnv* env, jobject thiz,
     jstring host, jint port, jstring file_path,
     jobject callback)
@@ -121,9 +125,9 @@ Java_com_filetransfer_protocol_NativeBridge_relaySendFile(
 }
 
 // 中继接收文件
-// Kotlin: relayRecvFile(host: String, port: Int, roomCode: String, saveDir: String, callback: ProgressCallback): Int
+// Kotlin: external fun relayRecvFileNative(host: String, port: Int, roomCode: String, saveDir: String, callback: ProgressCallback): Int
 JNIEXPORT jint JNICALL
-Java_com_filetransfer_protocol_NativeBridge_relayRecvFile(
+Java_com_filetransfer_protocol_NativeBridge_relayRecvFileNative(
     JNIEnv* env, jobject thiz,
     jstring host, jint port, jstring room_code,
     jstring save_dir, jobject callback)

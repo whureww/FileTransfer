@@ -14,6 +14,24 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.0.7"
+        
+        // NDK 配置: 编译 C++ 核心库 (libfiletransfer_native.so)
+        externalNativeBuild {
+            cmake {
+                cppFlags("-std=c++17")
+                arguments("-DANDROID_STL=c++_shared")
+            }
+        }
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
+    }
+    
+    externalNativeBuild {
+        cmake {
+            path = file("../native/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
     
     compileOptions {
@@ -28,6 +46,12 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+        }
+    }
+    
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 }

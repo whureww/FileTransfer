@@ -19,13 +19,14 @@ actual object NativeBridge {
     ): Int = relayRecvFileNative(host, port, roomCode, saveDir, callback)
 
     // JNI 声明 (对应 jni_bridge.cpp 中的导出函数)
-    @JvmStatic private external fun initNetworkNative(): Boolean
-    @JvmStatic private external fun cleanupNetworkNative()
-    @JvmStatic private external fun errorStringNative(code: Int): String
-    @JvmStatic private external fun relaySendFileNative(
+    // 注意: object 类的 external 方法需要 jobject thiz 参数 (与 C++ JNI 签名一致)
+    private external fun initNetworkNative(): Boolean
+    private external fun cleanupNetworkNative()
+    private external fun errorStringNative(code: Int): String
+    private external fun relaySendFileNative(
         host: String, port: Int, filePath: String, callback: ProgressCallback
     ): Int
-    @JvmStatic private external fun relayRecvFileNative(
+    private external fun relayRecvFileNative(
         host: String, port: Int, roomCode: String, saveDir: String, callback: ProgressCallback
     ): Int
 }

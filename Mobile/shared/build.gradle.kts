@@ -44,28 +44,17 @@ android {
     
     defaultConfig {
         minSdk = 24
-        
-        // NDK 配置: 编译 C++ 核心库
-        externalNativeBuild {
-            cmake {
-                cppFlags("-std=c++17")
-                arguments("-DANDROID_STL=c++_shared")
-            }
-        }
-        ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
-        }
-    }
-    
-    externalNativeBuild {
-        cmake {
-            path = file("../native/CMakeLists.txt")
-            version = "3.22.1"
-        }
     }
     
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+    
+    // 确保 AAR 的 release variant 正确发布 (供 androidApp 消费)
+    publishing {
+        singleVariant("release") {
+            withSourcesJar()
+        }
     }
 }
