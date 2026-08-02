@@ -1,6 +1,6 @@
 plugins {
     alias(libs.plugins.androidApplication)
-    id("org.jetbrains.kotlin.android")
+    alias(libs.plugins.kotlinAndroid)
     alias(libs.plugins.composeCompiler)
 }
 
@@ -35,26 +35,27 @@ android {
 dependencies {
     implementation(project(":shared"))
     
-    // Compose
-    val composeBom = platform("androidx.compose:compose-bom:2024.11.01")
+    // Compose (使用 BOM 统一版本, Kotlin 2.0+ 用 composeCompiler 插件)
+    val composeBom = platform("androidx.compose:compose-bom:2024.09.03")
     implementation(composeBom)
-    androidTestImplementation(composeBom)
     
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material:material-icons-extended")
     
-    // AndroidX
-    implementation("androidx.activity:activity-compose:1.9.1")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
+    // AndroidX Core
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.activity:activity-compose:1.9.2")
+    implementation("androidx.activity:activity-ktx:1.9.2")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
     
-    // 文件选择 (Activity Result API)
-    implementation("androidx.activity:activity-ktx:1.9.1")
+    // Kotlin Coroutines
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     
-    // Kotlin
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // Debug
+    debugImplementation("androidx.compose.ui:ui-tooling")
 }
