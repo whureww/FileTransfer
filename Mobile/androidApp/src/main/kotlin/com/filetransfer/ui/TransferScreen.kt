@@ -223,6 +223,14 @@ fun TransferScreen(
             onDismiss = { showAdvDialog = false }
         )
     }
+
+    // ===== 传输进度对话框 (扫码或手动触发的传输中均显示) =====
+    if (state is TransferState.Connecting || state is TransferState.Transferring) {
+        TransferProgressDialog(
+            state = state,
+            onCancel = { service.cancel() }
+        )
+    }
 }
 
 // ===== 局域网发送面板 =====
@@ -704,4 +712,88 @@ private fun formatBytes(bytes: Long): String {
     val mb = kb / 1024.0
     if (mb < 1024) return "%.1f MB".format(mb)
     return "%.1f GB".format(mb / 1024.0)
+}
+
+// ===== 传输进度对话框 =====
+@Composable
+private fun TransferProgressDialog(
+    state: TransferState,
+    onCancel: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = { /* 不可点击外部关闭, 只能点取消 */ },
+        title = {
+            Text(
+                when (state) {
+                    is TransferState.Connecting -> "正在连接..."
+                    is TransferState.Transferring -> "正在传输"
+                    else -> "传输中"
+                },
+                fontWeight = FontWeight.SemiBold
+            )
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                when (state) {
+                    is TransferState.Connecting -> {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                "正在连接, 请稍候...",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                    is TransferState.Transferring -> {
+                        val progress = if (state.total > 0)
+                            state.done.toFloat() / state.total
+                        else 0f
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.fillMaxWidth(),
+                            strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                "${formatBytes(state.done)} / ${formatBytes(state.total)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "${(progress * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        if (state.message.isNotEmpty()) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                state.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    else -> {}
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onCancel,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error
+                )
+            ) { Text("取消传输") }
+        }
+    )
 }

@@ -552,7 +552,6 @@ static HBITMAP GenerateQrBitmap(const std::string& text, int pixel_size, int& ou
 static void TransferThread_QrSend(std::string path) {
     unsigned short port = 9091;
     const int MAX_PORT_TRY = 20;
-    int tries = 0;
 
     auto cb = [](uint64_t done, uint64_t total, const std::string& msg) -> bool {
         post_progress(done, total, msg);
@@ -568,7 +567,31 @@ static void TransferThread_QrSend(std::string path) {
     }
     std::string my_ip = ips[0];
 
-    // 生成二维码内容: FT1|H|ip|port (HTTP 直连协议)
+    // 先探测可用端口 (创建临时 socket 绑定测试, 成功后关闭)
+    unsigned short confirmed_port = 0;
+    for (int i = 0; i < MAX_PORT_TRY; i++) {
+        unsigned short try_port = port + i;
+        SOCKET test_sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (test_sock == INVALID_SOCKET) continue;
+        sockaddr_in test_addr{};
+        test_addr.sin_family = AF_INET;
+        test_addr.sin_port = ::htons(try_port);
+        test_addr.sin_addr.s_addr = ::htonl(INADDR_ANY);
+        if (::bind(test_sock, reinterpret_cast<sockaddr*>(&test_addr), sizeof(test_addr)) == 0) {
+            confirmed_port = try_port;
+            ::closesocket(test_sock);
+            break;
+        }
+        ::closesocket(test_sock);
+    }
+    if (confirmed_port == 0) {
+        post_progress(0, 0, "[错误] 无法找到可用端口 (9091-9110 均被占用), 请检查防火墙");
+        PostMessageW(g_ctx.hwnd, WM_APP_DONE, (WPARAM)ft::ERR_BIND, 0);
+        return;
+    }
+    port = confirmed_port;
+
+    // 用确认的端口生成二维码内容: FT1|H|ip|port (HTTP 直连协议)
     g_ctx.qr_data = "FT1|H|" + my_ip + "|" + std::to_string(port);
 
     // 生成位图并内嵌显示
@@ -594,21 +617,11 @@ static void TransferThread_QrSend(std::string path) {
         DoLayout(rc.right, rc.bottom);
     }
 
-    post_progress(0, 0, "[信息] 二维码已生成, 等待手机扫码连接...");
+    post_progress(0, 0, "[信息] 二维码已生成 (" + my_ip + ":" + std::to_string(port) +
+                   "), 等待手机扫码连接...");
 
     // 等待手机连接并传输 (serve_file 绑定端口, 等待客户端连接并发送文件)
-    int ret = ft::ERR_BIND;
-    while (tries < MAX_PORT_TRY) {
-        ret = ft::serve_file(port, path, cb);
-        if (ret != ft::ERR_BIND && ret != ft::ERR_LISTEN) break;
-        port++;
-        tries++;
-    }
-    if (tries >= MAX_PORT_TRY) {
-        post_progress(0, 0, "[错误] 无法绑定端口, 请检查防火墙或手动指定端口");
-        PostMessageW(g_ctx.hwnd, WM_APP_DONE, (WPARAM)ret, 0);
-        return;
-    }
+    int ret = ft::serve_file(port, path, cb);
 
     PostMessageW(g_ctx.hwnd, WM_APP_DONE, (WPARAM)ret, 0);
 }

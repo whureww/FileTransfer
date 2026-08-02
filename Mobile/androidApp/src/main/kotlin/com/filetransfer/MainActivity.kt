@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
                                 setDesiredBarcodeFormats(ScanOptions.QR_CODE)
                                 setPrompt("将手机摄像头对准 PC 端生成的二维码")
                                 setBeepEnabled(true)
-                                setOrientationLocked(false)
+                                setOrientationLocked(true)
                             }
                             scanLauncher.launch(options)
                         }
