@@ -11,6 +11,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.mutableStateOf
 import com.filetransfer.service.TransferService
 import com.filetransfer.ui.TransferScreen
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import java.io.File
 import java.io.FileOutputStream
 
@@ -42,14 +44,23 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         uri?.let {
-            // 持久化 URI 权限
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
                 Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             contentResolver.takePersistableUriPermission(it, flags)
-
-            // 保存 URI 到 service
             transferService.setCustomSaveDir(it.toString())
             Toast.makeText(this, "已设置自定义保存目录", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // ZXing 二维码扫描器
+    private val scanLauncher = registerForActivityResult(ScanContract()) { result ->
+        if (result.contents != null) {
+            val qrContent = result.contents
+            val saveDir = transferService.saveDir
+            val success = transferService.recvFileByScan(qrContent, saveDir)
+            if (!success) {
+                Toast.makeText(this, "二维码内容无效, 请扫描正确的二维码", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -72,7 +83,16 @@ class MainActivity : ComponentActivity() {
                 onFilePathChange = { filePathState.value = it },
                 onPickFile = { pickFileLauncher.launch("*/*") },
                 saveDirProvider = { transferService.saveDir },
-                onPickSaveDir = { pickDirLauncher.launch(null) }
+                onPickSaveDir = { pickDirLauncher.launch(null) },
+                onScan = {
+                    val options = ScanOptions().apply {
+                        setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        setPrompt("将手机摄像头对准 PC 端生成的二维码")
+                        setBeepEnabled(true)
+                        setOrientationLocked(false)
+                    }
+                    scanLauncher.launch(options)
+                }
             )
         }
     }

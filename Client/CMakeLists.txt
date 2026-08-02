@@ -35,6 +35,7 @@ set(GUI_SOURCES
     src/socket_util.cpp
     src/file_transfer.cpp
     src/relay_client.cpp
+    src/qrcodegen.cpp
     ${SECRET_SRC}
     src/gui_main.cpp
     app.rc      # Windows 资源(程序图标 + 版本信息)

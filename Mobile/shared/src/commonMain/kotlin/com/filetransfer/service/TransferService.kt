@@ -266,6 +266,64 @@ class TransferService {
         }
     }
 
+    // ===== 扫码接收 (解析二维码内容, 通过中继接收文件) =====
+    // QR 内容格式: FT1|R|relay_host|port|room_code
+    fun recvFileByScan(qrContent: String, saveDir: String): Boolean {
+        if (transferJob?.isActive == true) return false
+
+        // 解析二维码内容
+        val parts = qrContent.split("|")
+        if (parts.size < 5 || parts[0] != "FT1" || parts[1] != "R") {
+            appendLog("[错误] 无效的二维码内容: $qrContent")
+            return false
+        }
+
+        val relayHost = parts[2]
+        val relayPort = parts[3].toIntOrNull() ?: return false
+        val roomCode = parts[4].trim().uppercase()
+
+        if (roomCode.length != 6) {
+            appendLog("[错误] 房间码长度不正确: $roomCode")
+            return false
+        }
+
+        canceled = false
+        clearLogs()
+        appendLog("========== 扫码接收 (中继) ==========")
+        appendLog("[信息] 正在连接中继服务器...")
+        appendLog("[信息] 房间码: $roomCode")
+
+        transferJob = CoroutineScope(Dispatchers.Default).launch {
+            _state.value = TransferState.Connecting
+
+            val callback = object : ProgressCallback {
+                override fun onProgress(done: Long, total: Long, message: String): Boolean {
+                    if (total > 0) {
+                        _state.value = TransferState.Transferring(done, total, message)
+                    } else if (message.isNotEmpty()) {
+                        appendLog(message)
+                    }
+                    return !canceled
+                }
+            }
+
+            val result = NativeBridge.relayRecvFile(
+                relayHost, relayPort, roomCode, saveDir, callback
+            )
+
+            _state.value = when {
+                canceled -> { appendLog("[取消] 传输已取消"); TransferState.Canceled }
+                result == 0 -> { appendLog("[完成] 文件接收成功, 保存到: $saveDir"); TransferState.Done }
+                else -> {
+                    appendLog("[失败] 错误码: $result (${NativeBridge.errorString(result)})")
+                    TransferState.Error(result, NativeBridge.errorString(result))
+                }
+            }
+            autoReset()
+        }
+        return true
+    }
+
     // 取消当前传输
     fun cancel() {
         canceled = true

@@ -3,6 +3,7 @@
 #include "file_transfer.h"
 #include "relay.h"
 #include "secret.h"
+#include "qrcodegen.hpp"
 
 #include <windows.h>
 #include <windowsx.h>
@@ -68,6 +69,7 @@ enum ControlId {
     IDC_RSEND_FILE_BROWSE,
     IDC_RSEND_BTN,
     IDC_RSEND_ADV_BTN,      // 高级设置 (自定义中继服务器)
+    IDC_RSEND_QR_BTN,       // 生成二维码 (扫码发送)
     IDC_RSEND_CODE_EDIT,    // 显示生成的房间码
     // 中继 - 接收方
     IDC_RRECV_CODE_EDIT,    // 输入对方房间码
@@ -86,6 +88,8 @@ enum {
     WM_APP_DONE,
     // 专用消息: 中继发送方收到房间码后, 把房间码显示到 UI
     WM_APP_ROOM_CODE,
+    // 专用消息: 显示二维码对话框
+    WM_APP_QR_SHOW,
 };
 
 // 系统托盘消息 + 菜单 ID
@@ -137,6 +141,7 @@ struct AppContext {
     HWND hRSendFileLbl = nullptr, hRSendFileEdit = nullptr;
     HWND hRSendFileBrowse = nullptr, hRSendBtn = nullptr;
     HWND hRSendAdvBtn = nullptr;  // 高级设置按钮
+    HWND hRSendQrBtn = nullptr;   // 生成二维码按钮
     HWND hRSendCodeLbl = nullptr, hRSendCodeEdit = nullptr;
 
     // 自定义中继服务器地址 (用户通过高级设置填入, 为空则使用内置地址)
@@ -161,6 +166,13 @@ struct AppContext {
     bool tray_created = false;
     bool force_quit = false;       // 托盘"退出"触发, 跳过关闭对话框
     int close_action = 0;          // 0=询问, 1=最小化到托盘, 2=退出
+
+    // ===== 二维码扫码模式 =====
+    bool qr_mode = false;          // 是否处于二维码发送模式
+    HWND hQrDlg = nullptr;         // 二维码对话框窗口句柄
+    std::string qr_data;           // 二维码内容数据
+    HBITMAP qr_bitmap = nullptr;   // 二维码位图
+    int qr_bitmap_size = 0;        // 二维码位图边长 (像素)
 };
 
 static AppContext g_ctx;
@@ -305,8 +317,10 @@ static void DoLayout(int cx, int cy) {
     int yRS4 = yRS3 + EDIT_H + 16;
     int rSendBtnW = 160;
     int rAdvBtnW = 90;
+    int rQrBtnW = 110;
     MoveWindow(g_ctx.hRSendBtn, x + LABEL_W, yRS4, rSendBtnW, BTN_H, TRUE);
     MoveWindow(g_ctx.hRSendAdvBtn, x + LABEL_W + rSendBtnW + 10, yRS4, rAdvBtnW, BTN_H, TRUE);
+    MoveWindow(g_ctx.hRSendQrBtn, x + LABEL_W + rSendBtnW + 10 + rAdvBtnW + 10, yRS4, rQrBtnW, BTN_H, TRUE);
 
     // ===== 中继 - 接收方区域 =====
     int yRR = yR;  // 与 LAN 接收区同位置 (互斥显示)
@@ -356,7 +370,7 @@ static void ApplyModeVisibility() {
     // 中继区
     ShowGroup({
         g_ctx.hRSendGroup, g_ctx.hRSendFileLbl, g_ctx.hRSendFileEdit,
-        g_ctx.hRSendFileBrowse, g_ctx.hRSendBtn, g_ctx.hRSendAdvBtn,
+        g_ctx.hRSendFileBrowse, g_ctx.hRSendBtn, g_ctx.hRSendAdvBtn, g_ctx.hRSendQrBtn,
         g_ctx.hRSendCodeLbl, g_ctx.hRSendCodeEdit,
         g_ctx.hRRecvGroup, g_ctx.hRRecvCodeLbl, g_ctx.hRRecvCodeEdit,
         g_ctx.hRRecvDirLbl, g_ctx.hRRecvDirEdit, g_ctx.hRRecvDirBrowse, g_ctx.hRRecvBtn,
@@ -385,6 +399,7 @@ static void SetTransferControls(BOOL enabled) {
 
     EnableWindow(g_ctx.hRSendBtn, enabled);
     EnableWindow(g_ctx.hRSendAdvBtn, enabled);
+    EnableWindow(g_ctx.hRSendQrBtn, enabled);
     EnableWindow(g_ctx.hRSendFileEdit, enabled);
     EnableWindow(g_ctx.hRSendFileBrowse, enabled);
     EnableWindow(g_ctx.hRRecvBtn, enabled);
@@ -1346,6 +1361,167 @@ static bool get_effective_relay_addr(std::string& host, unsigned short& port) {
     return ft::parse_relay_addr(host, port);
 }
 
+// ========== 二维码生成与对话框 ==========
+
+// 生成二维码位图 (HBITMAP)
+// QR 内容格式: FT1|R|relay_host|port|room_code
+static HBITMAP GenerateQrBitmap(const std::string& text, int pixel_size, int& out_size) {
+    using namespace qrcodegen;
+    QrCode qr = QrCode::encodeText(text.c_str(), Ecc::MEDIUM);
+    int modules = qr.getSize();
+    int border = 4;  // QR 规范要求 4 模块白边
+    int total = (modules + border * 2) * pixel_size;
+    out_size = total;
+
+    // 创建 DIB section
+    BITMAPINFOHEADER bi = {};
+    bi.biSize = sizeof(BITMAPINFOHEADER);
+    bi.biWidth = total;
+    bi.biHeight = -total;  // 自上而下
+    bi.biPlanes = 1;
+    bi.biBitCount = 24;
+    bi.biCompression = BI_RGB;
+
+    HDC hdc = GetDC(nullptr);
+    void* bits = nullptr;
+    HBITMAP hBmp = CreateDIBSection(hdc, (BITMAPINFO*)&bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    ReleaseDC(nullptr, hdc);
+    if (!hBmp) return nullptr;
+
+    // 填充像素 (每行需要 4 字节对齐)
+    int row_bytes = (total * 3 + 3) & ~3;
+    auto* buf = (unsigned char*)bits;
+    for (int y = 0; y < total; y++) {
+        int module_y = y / pixel_size - border;
+        for (int x = 0; x < total; x++) {
+            int module_x = x / pixel_size - border;
+            bool dark = false;
+            if (module_x >= 0 && module_x < modules && module_y >= 0 && module_y < modules) {
+                dark = qr.getModule(module_x, module_y);
+            }
+            unsigned char val = dark ? 0 : 255;
+            int offset = y * row_bytes + x * 3;
+            buf[offset] = val;     // B
+            buf[offset + 1] = val; // G
+            buf[offset + 2] = val; // R
+        }
+        // 填充对齐字节
+        for (int x = total * 3; x < row_bytes; x++) {
+            buf[y * row_bytes + x] = 0;
+        }
+    }
+    return hBmp;
+}
+
+// 二维码对话框窗口过程
+static LRESULT CALLBACK QrDlgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+    case WM_CREATE: {
+        // 标题文字
+        CreateWindowExW(0, L"STATIC", L"请用手机扫描下方二维码接收文件",
+            WS_CHILD | WS_VISIBLE | SS_CENTER,
+            10, 10, 320, 24, hWnd, nullptr, g_ctx.hInst, nullptr);
+        // 房间码文字
+        CreateWindowExW(0, L"STATIC", L"",
+            WS_CHILD | WS_VISIBLE | SS_CENTER,
+            10, 40, 320, 24, hWnd, (HMENU)101, g_ctx.hInst, nullptr);
+        break;
+    }
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        if (g_ctx.qr_bitmap) {
+            HDC hdcMem = CreateCompatibleDC(hdc);
+            HBITMAP hOld = (HBITMAP)SelectObject(hdcMem, g_ctx.qr_bitmap);
+            int x = (340 - g_ctx.qr_bitmap_size) / 2 + 10;
+            int y = 75;
+            BitBlt(hdc, x, y, g_ctx.qr_bitmap_size, g_ctx.qr_bitmap_size,
+                   hdcMem, 0, 0, SRCCOPY);
+            SelectObject(hdcMem, hOld);
+            DeleteDC(hdcMem);
+        }
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+    case WM_CLOSE:
+        DestroyWindow(hWnd);
+        return 0;
+    case WM_DESTROY:
+        g_ctx.hQrDlg = nullptr;
+        break;
+    }
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+// 显示二维码对话框
+static void ShowQrDialog(HWND hParent, const std::string& room_code,
+                         const std::string& relay_host, unsigned short relay_port) {
+    // 生成二维码内容: FT1|R|host|port|code
+    g_ctx.qr_data = "FT1|R|" + relay_host + "|" +
+                    std::to_string(relay_port) + "|" + room_code;
+
+    // 生成位图 (每模块 8 像素)
+    if (g_ctx.qr_bitmap) { DeleteObject(g_ctx.qr_bitmap); g_ctx.qr_bitmap = nullptr; }
+    g_ctx.qr_bitmap = GenerateQrBitmap(g_ctx.qr_data, 8, g_ctx.qr_bitmap_size);
+    if (!g_ctx.qr_bitmap) return;
+
+    // 注册窗口类 (仅一次)
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSEXW wc = {};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = QrDlgProc;
+        wc.hInstance = g_ctx.hInst;
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+        wc.lpszClassName = L"FileTransferQrDlg";
+        RegisterClassExW(&wc);
+        registered = true;
+    }
+
+    int dlgW = 360, dlgH = 420;
+    RECT parentRc;
+    GetWindowRect(hParent, &parentRc);
+    int x = parentRc.left + (parentRc.right - parentRc.left - dlgW) / 2;
+    int y = parentRc.top + (parentRc.bottom - parentRc.top - dlgH) / 2;
+
+    g_ctx.hQrDlg = CreateWindowExW(0, L"FileTransferQrDlg",
+        L"扫码接收文件",
+        WS_POPUP | WS_CAPTION | WS_SYSMENU,
+        x, y, dlgW, dlgH,
+        hParent, nullptr, g_ctx.hInst, nullptr);
+
+    if (g_ctx.hQrDlg) {
+        // 设置房间码文字
+        std::wstring hint = L"房间码: " + utf8_to_wide(room_code);
+        HWND hCodeText = GetDlgItem(g_ctx.hQrDlg, 101);
+        if (hCodeText) SetWindowTextW(hCodeText, hint.c_str());
+
+        // 设置字体
+        HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        EnumChildWindows(g_ctx.hQrDlg, [](HWND hChild, LPARAM lp) -> BOOL {
+            SendMessageW(hChild, WM_SETFONT, lp, TRUE);
+            return TRUE;
+        }, (LPARAM)hFont);
+
+        ShowWindow(g_ctx.hQrDlg, SW_SHOW);
+        SetForegroundWindow(g_ctx.hQrDlg);
+    }
+}
+
+// 关闭二维码对话框
+static void CloseQrDialog() {
+    if (g_ctx.hQrDlg) {
+        DestroyWindow(g_ctx.hQrDlg);
+        g_ctx.hQrDlg = nullptr;
+    }
+    if (g_ctx.qr_bitmap) {
+        DeleteObject(g_ctx.qr_bitmap);
+        g_ctx.qr_bitmap = nullptr;
+    }
+    g_ctx.qr_mode = false;
+}
+
 // ========== 窗口过程 ==========
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
@@ -1414,6 +1590,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                    BS_PUSHBUTTON | BS_DEFPUSHBUTTON, 0, 0, 10, 10, IDC_RSEND_BTN);
         g_ctx.hRSendAdvBtn = CreateCtrl(hWnd, L"button", L"高级设置",
                    BS_PUSHBUTTON, 0, 0, 10, 10, IDC_RSEND_ADV_BTN);
+        g_ctx.hRSendQrBtn = CreateCtrl(hWnd, L"button", L"生成二维码",
+                   BS_PUSHBUTTON, 0, 0, 10, 10, IDC_RSEND_QR_BTN);
 
         // ===== 中继 - 接收方 =====
         g_ctx.hRRecvGroup = CreateCtrl(hWnd, L"button", L"中继接收 (输入房间码)",
@@ -1604,6 +1782,29 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                                        host, port, wide_to_utf8(file_w));
             break;
         }
+        case IDC_RSEND_QR_BTN: {
+            // 二维码发送模式: 创建中继房间后生成二维码供手机扫描
+            if (g_ctx.busy.load()) break;
+            std::wstring file_w = GetTextW(g_ctx.hRSendFileEdit);
+            std::string host; unsigned short port;
+            if (!get_effective_relay_addr(host, port)) {
+                MessageBoxW(hWnd, L"中继服务器地址解析失败", L"错误", MB_OK | MB_ICONERROR); break;
+            }
+            if (file_w.empty()) {
+                MessageBoxW(hWnd, L"请选择要发送的文件", L"提示", MB_OK | MB_ICONWARNING); break;
+            }
+            g_ctx.busy = true; g_ctx.cancel = false;
+            g_ctx.qr_mode = true;  // 标记二维码模式
+            SetTransferControls(FALSE);
+            SendMessageW(g_ctx.hProgress, PBM_SETPOS, 0, 0);
+            SetWindowTextW(g_ctx.hLog, L"");
+            SetWindowTextW(g_ctx.hRSendCodeEdit, L"创建中...");
+            AppendLog(L"========== 二维码发送 (创建房间) ==========\r\n");
+            AppendLog(L"[信息] 正在连接中继服务器创建房间...\r\n");
+            g_ctx.worker = std::thread(TransferThread_RelaySend,
+                                       host, port, wide_to_utf8(file_w));
+            break;
+        }
         case IDC_RRECV_BTN: {
             if (g_ctx.busy.load()) break;
             std::wstring code_w = GetTextW(g_ctx.hRRecvCodeEdit);
@@ -1667,7 +1868,15 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (code) {
             std::wstring wcode = utf8_to_wide(*code);
             SetWindowTextW(g_ctx.hRSendCodeEdit, wcode.c_str());
-            AppendLog(L"[房间码] " + wcode + L"  (将此房间码告知接收方)\r\n");
+            if (g_ctx.qr_mode) {
+                // 二维码模式: 生成并显示二维码
+                std::string rhost; unsigned short rport;
+                get_effective_relay_addr(rhost, rport);
+                AppendLog(L"[房间码] " + wcode + L"  二维码已生成, 等待手机扫码\r\n");
+                ShowQrDialog(hWnd, *code, rhost, rport);
+            } else {
+                AppendLog(L"[房间码] " + wcode + L"  (将此房间码告知接收方)\r\n");
+            }
             delete code;
         }
         return 0;
@@ -1679,6 +1888,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (g_ctx.discovery_worker.joinable()) {
             g_ctx.discovery_running = false;
             g_ctx.discovery_worker.join();
+        }
+        // 关闭二维码对话框
+        if (g_ctx.qr_mode) {
+            CloseQrDialog();
         }
         g_ctx.busy = false;
         SetTransferControls(TRUE);
@@ -1758,6 +1971,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
 
     case WM_DESTROY:
+        CloseQrDialog();
         TrayDelete();
         if (g_ctx.hFont) DeleteObject(g_ctx.hFont);
         PostQuitMessage(0);

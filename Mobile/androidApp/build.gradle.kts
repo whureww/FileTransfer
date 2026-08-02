@@ -80,6 +80,9 @@ dependencies {
     // Kotlin Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     
+    // ZXing 条码/二维码扫描
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    
     // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -39,7 +40,8 @@ fun TransferScreen(
     onFilePathChange: (String) -> Unit,
     onPickFile: () -> Unit = {},
     saveDirProvider: () -> String = { "/storage/emulated/0/Download" },
-    onPickSaveDir: () -> Unit = {}
+    onPickSaveDir: () -> Unit = {},
+    onScan: () -> Unit = {}
 ) {
     val state by service.state.collectAsState()
     val logs by service.logs.collectAsState()
@@ -122,6 +124,20 @@ fun TransferScreen(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            // ===== 扫码接收按钮 (仅在接收标签显示) =====
+            if (transferMode == TransferMode.RECV) {
+                OutlinedButton(
+                    onClick = onScan,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isBusy
+                ) {
+                    Icon(Icons.Default.QrCodeScanner, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("扫码接收")
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
 
             // ===== 模式内容区 =====
             when (connMode) {
