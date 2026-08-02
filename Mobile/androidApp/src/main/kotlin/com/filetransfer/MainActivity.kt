@@ -2,13 +2,18 @@ package com.filetransfer
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.provider.DocumentsContract
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.mutableStateOf
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.filetransfer.service.TransferService
 import com.filetransfer.ui.QrScannerScreen
 import com.filetransfer.ui.SplashScreen
@@ -73,6 +78,9 @@ class MainActivity : ComponentActivity() {
             saveDir = defaultSaveDir.absolutePath
         }
 
+        // 请求文件访问权限 (Android 11+ 需要 MANAGE_EXTERNAL_STORAGE)
+        requestStoragePermission()
+
         setContent {
             FileTransferTheme {
                 when {
@@ -113,6 +121,34 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         transferService.destroy()
+    }
+
+    /**
+     * 请求文件访问权限:
+     * - Android 11+ (API 30+): 请求 MANAGE_EXTERNAL_STORAGE
+     * - Android 10 以下: 请求 READ/WRITE_EXTERNAL_STORAGE
+     */
+    private fun requestStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                try {
+                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    // 某些机型不支持此 Action, 回退到通用设置
+                    val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                    startActivity(intent)
+                }
+            }
+        } else {
+            val permissions = arrayOf(
+                android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+            )
+            ActivityCompat.requestPermissions(this, permissions, 1001)
+        }
     }
 
     /**

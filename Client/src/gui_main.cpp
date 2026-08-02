@@ -1613,6 +1613,33 @@ static HBITMAP GenerateQrBitmap(const std::string& text, int pixel_size, int& ou
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE: {
+        // 注册 Windows 防火墙规则 (允许本程序接收入站 TCP 连接)
+        // 使用 ShellExecuteW runas 尝试以管理员权限添加, 如果用户拒绝则静默失败
+        {
+            wchar_t exe_path[MAX_PATH] = {0};
+            GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
+            // 检查防火墙规则是否已存在 (netsh show rule)
+            std::wstring check_cmd = L"netsh advfirewall firewall show rule name=\"FileTransfer\" >nul 2>&1";
+            int ret = _wsystem(check_cmd.c_str());
+            if (ret != 0) {
+                // 规则不存在, 尝试添加 (需要管理员权限)
+                std::wstring add_cmd = L"netsh advfirewall firewall add rule name=\"FileTransfer\" "
+                    L"dir=in action=allow program=\"" + std::wstring(exe_path) + L"\" enable=yes";
+                // 使用 ShellExecuteW runas 弹出 UAC 提示
+                SHELLEXECUTEINFOW sei = {};
+                sei.cbSize = sizeof(sei);
+                sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NO_CONSOLE;
+                sei.lpVerb = L"runas";
+                sei.lpFile = L"netsh.exe";
+                // 构建参数字符串
+                std::wstring params = L"advfirewall firewall add rule name=\"FileTransfer\" "
+                    L"dir=in action=allow program=\"" + std::wstring(exe_path) + L"\" enable=yes";
+                sei.lpParameters = params.c_str();
+                sei.nShow = SW_HIDE;
+                ShellExecuteExW(&sei);
+            }
+        }
+
         // 创建字体 (18px, 约 13.5pt, 清晰易读)
         g_ctx.hFont = CreateFontW(18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                   DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
