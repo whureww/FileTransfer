@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -40,6 +41,7 @@ fun QrScannerScreen(
     var scanLineOffset by remember { mutableStateOf(0f) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val barcodeViewRef = remember { mutableStateOf<BarcodeView?>(null) }
+    val hasScannedRef = remember { mutableStateOf(false) }
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -65,7 +67,6 @@ fun QrScannerScreen(
         }
     }
 
-    // Lifecycle management for BarcodeView
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -109,7 +110,8 @@ fun QrScannerScreen(
                     BarcodeView(ctx).apply {
                         decodeContinuous(object : BarcodeCallback {
                             override fun barcodeResult(result: BarcodeResult) {
-                                if (!hasScanned) {
+                                if (!hasScannedRef.value) {
+                                    hasScannedRef.value = true
                                     hasScanned = true
                                     result.text?.let { qr ->
                                         if (qr.isNotBlank()) {
@@ -157,9 +159,10 @@ fun QrScannerScreen(
 
 @Composable
 private fun ScannerOverlay(scanProgress: Float) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        val frameColor = Color(0xFF00E676)
+    val frameColor = Color(0xFF00E676)
+    val dashEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f))
 
+    Box(modifier = Modifier.fillMaxSize()) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val cw = size.width
             val ch = size.height
@@ -180,23 +183,21 @@ private fun ScannerOverlay(scanProgress: Float) {
                 topLeft = Offset(right, top), size = Size(cw - right, frameSize))
 
             // Frame border
-            val sw = 3f
-            drawLine(frameColor, Offset(left, top), Offset(right, top), strokeWidth = sw)
-            drawLine(frameColor, Offset(left, bottom), Offset(right, bottom), strokeWidth = sw)
-            drawLine(frameColor, Offset(left, top), Offset(left, bottom), strokeWidth = sw)
-            drawLine(frameColor, Offset(right, top), Offset(right, bottom), strokeWidth = sw)
+            drawLine(frameColor, Offset(left, top), Offset(right, top), strokeWidth = 3f)
+            drawLine(frameColor, Offset(left, bottom), Offset(right, bottom), strokeWidth = 3f)
+            drawLine(frameColor, Offset(left, top), Offset(left, bottom), strokeWidth = 3f)
+            drawLine(frameColor, Offset(right, top), Offset(right, bottom), strokeWidth = 3f)
 
             // Corner markers
             val cl = frameSize * 0.15f
-            val cs = 6f
-            drawLine(frameColor, Offset(left, top), Offset(left + cl, top), strokeWidth = cs)
-            drawLine(frameColor, Offset(left, top), Offset(left, top + cl), strokeWidth = cs)
-            drawLine(frameColor, Offset(right, top), Offset(right - cl, top), strokeWidth = cs)
-            drawLine(frameColor, Offset(right, top), Offset(right, top + cl), strokeWidth = cs)
-            drawLine(frameColor, Offset(left, bottom), Offset(left + cl, bottom), strokeWidth = cs)
-            drawLine(frameColor, Offset(left, bottom), Offset(left, bottom - cl), strokeWidth = cs)
-            drawLine(frameColor, Offset(right, bottom), Offset(right - cl, bottom), strokeWidth = cs)
-            drawLine(frameColor, Offset(right, bottom), Offset(right, bottom - cl), strokeWidth = cs)
+            drawLine(frameColor, Offset(left, top), Offset(left + cl, top), strokeWidth = 6f)
+            drawLine(frameColor, Offset(left, top), Offset(left, top + cl), strokeWidth = 6f)
+            drawLine(frameColor, Offset(right, top), Offset(right - cl, top), strokeWidth = 6f)
+            drawLine(frameColor, Offset(right, top), Offset(right, top + cl), strokeWidth = 6f)
+            drawLine(frameColor, Offset(left, bottom), Offset(left + cl, bottom), strokeWidth = 6f)
+            drawLine(frameColor, Offset(left, bottom), Offset(left, bottom - cl), strokeWidth = 6f)
+            drawLine(frameColor, Offset(right, bottom), Offset(right - cl, bottom), strokeWidth = 6f)
+            drawLine(frameColor, Offset(right, bottom), Offset(right, bottom - cl), strokeWidth = 6f)
 
             // Scanning line
             val sy = top + (bottom - top) * scanProgress
@@ -205,8 +206,7 @@ private fun ScannerOverlay(scanProgress: Float) {
                 start = Offset(left + 10f, sy),
                 end = Offset(right - 10f, sy),
                 strokeWidth = 3f,
-                pathEffect = androidx.compose.ui.graphics.PathEffect
-                    .dashPathEffect(floatArrayOf(12f, 8f))
+                pathEffect = dashEffect
             )
         }
     }
