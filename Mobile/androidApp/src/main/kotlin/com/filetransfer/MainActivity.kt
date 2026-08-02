@@ -10,11 +10,10 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.mutableStateOf
 import com.filetransfer.service.TransferService
+import com.filetransfer.ui.QrScannerScreen
 import com.filetransfer.ui.SplashScreen
 import com.filetransfer.ui.TransferScreen
 import com.filetransfer.ui.theme.FileTransferTheme
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
 import java.io.File
 import java.io.FileOutputStream
 
@@ -27,6 +26,9 @@ class MainActivity : ComponentActivity() {
 
     // 启动屏状态
     private val showSplashState = mutableStateOf(true)
+
+    // 扫码界面状态
+    private val showScannerState = mutableStateOf(false)
 
     // 默认保存目录 (app 专用 received 文件夹)
     private lateinit var defaultSaveDir: File
@@ -57,17 +59,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ZXing 二维码扫描器
-    private val scanLauncher = registerForActivityResult(ScanContract()) { result ->
-        if (result.contents != null) {
-            val qrContent = result.contents
-            val saveDir = transferService.saveDir
-            val success = transferService.recvFileByScan(qrContent, saveDir)
-            if (!success) {
-                Toast.makeText(this, "二维码内容无效, 请扫描正确的二维码", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
+    // ZXing 二维码扫描器 - 已替换为内嵌 BarcodeView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,26 +75,36 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             FileTransferTheme {
-                if (showSplashState.value) {
-                    SplashScreen(onFinished = { showSplashState.value = false })
-                } else {
-                    TransferScreen(
-                        service = transferService,
-                        filePath = filePathState.value,
-                        onFilePathChange = { filePathState.value = it },
-                        onPickFile = { pickFileLauncher.launch("*/*") },
-                        saveDirProvider = { transferService.saveDir },
-                        onPickSaveDir = { pickDirLauncher.launch(null) },
-                        onScan = {
-                            val options = ScanOptions().apply {
-                                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                                setPrompt("将手机摄像头对准 PC 端生成的二维码")
-                                setBeepEnabled(true)
-                                setOrientationLocked(true)
-                            }
-                            scanLauncher.launch(options)
-                        }
-                    )
+                when {
+                    showSplashState.value -> {
+                        SplashScreen(onFinished = { showSplashState.value = false })
+                    }
+                    showScannerState.value -> {
+                        QrScannerScreen(
+                            onQrCodeDetected = { qrContent ->
+                                showScannerState.value = false
+                                val saveDir = transferService.saveDir
+                                val success = transferService.recvFileByScan(qrContent, saveDir)
+                                if (!success) {
+                                    Toast.makeText(this@MainActivity,
+                                        "二维码内容无效, 请扫描正确的二维码",
+                                        Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onBack = { showScannerState.value = false }
+                        )
+                    }
+                    else -> {
+                        TransferScreen(
+                            service = transferService,
+                            filePath = filePathState.value,
+                            onFilePathChange = { filePathState.value = it },
+                            onPickFile = { pickFileLauncher.launch("*/*") },
+                            saveDirProvider = { transferService.saveDir },
+                            onPickSaveDir = { pickDirLauncher.launch(null) },
+                            onScan = { showScannerState.value = true }
+                        )
+                    }
                 }
             }
         }
