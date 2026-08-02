@@ -9,6 +9,7 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -37,10 +38,12 @@ fun TransferScreen(
     filePath: String,
     onFilePathChange: (String) -> Unit,
     onPickFile: () -> Unit = {},
-    saveDirProvider: () -> String = { "/storage/emulated/0/Download" }
+    saveDirProvider: () -> String = { "/storage/emulated/0/Download" },
+    onPickSaveDir: () -> Unit = {}
 ) {
     val state by service.state.collectAsState()
     val logs by service.logs.collectAsState()
+    val customSaveDir by service.customSaveDirUri.collectAsState()
 
     var connMode by rememberSaveable { mutableStateOf(ConnMode.LAN) }
     var bottomTab by rememberSaveable { mutableStateOf(BottomTab.SEND) }
@@ -58,6 +61,10 @@ fun TransferScreen(
     val isBusy = state is TransferState.Connecting ||
         state is TransferState.Transferring ||
         state is TransferState.WaitingForPeer
+
+    // 当前保存目录显示
+    val currentSaveDir = customSaveDir?.let { "自定义目录" }
+        ?: saveDirProvider().substringAfterLast("/")
 
     Scaffold(
         topBar = {
@@ -131,19 +138,19 @@ fun TransferScreen(
                                 service.lanPort = lanPort.toIntOrNull() ?: 9090
                                 service.sendFileLan(filePath)
                             },
-                            onCancel = { service.cancel() },
-                            onReset = { service.reset() }
+                            onCancel = { service.cancel() }
                         )
                         TransferMode.RECV -> LanRecvPanel(
                             state = state,
                             lanPort = lanPort,
+                            saveDir = currentSaveDir,
                             onPortChange = { lanPort = it },
+                            onPickSaveDir = onPickSaveDir,
                             onStart = {
                                 service.lanPort = lanPort.toIntOrNull() ?: 9090
                                 service.recvFileLan(saveDirProvider())
                             },
-                            onCancel = { service.cancel() },
-                            onReset = { service.reset() }
+                            onCancel = { service.cancel() }
                         )
                     }
                 }
@@ -155,16 +162,16 @@ fun TransferScreen(
                             onFilePathChange = onFilePathChange,
                             onPickFile = onPickFile,
                             onStart = { service.sendFileRelay(filePath) },
-                            onCancel = { service.cancel() },
-                            onReset = { service.reset() }
+                            onCancel = { service.cancel() }
                         )
                         TransferMode.RECV -> RelayRecvPanel(
                             state = state,
                             roomCode = roomCode,
+                            saveDir = currentSaveDir,
                             onRoomCodeChange = { roomCode = it },
+                            onPickSaveDir = onPickSaveDir,
                             onStart = { service.recvFileRelay(roomCode, saveDirProvider()) },
-                            onCancel = { service.cancel() },
-                            onReset = { service.reset() }
+                            onCancel = { service.cancel() }
                         )
                     }
                 }
@@ -196,8 +203,7 @@ private fun LanSendPanel(
     onPickFile: () -> Unit,
     onPortChange: (String) -> Unit,
     onStart: () -> Unit,
-    onCancel: () -> Unit,
-    onReset: () -> Unit
+    onCancel: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -234,13 +240,7 @@ private fun LanSendPanel(
 
             // 开始按钮在传输中变为取消按钮
             if (state is TransferState.Connecting || state is TransferState.Transferring) {
-                Button(
-                    onClick = onCancel,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    )
-                ) { Text("取消") }
+                CancelButton(onCancel)
             } else {
                 Button(
                     onClick = onStart,
@@ -249,7 +249,7 @@ private fun LanSendPanel(
                 ) { Text("发送") }
             }
 
-            TransferStateView(state, onCancel, onReset)
+            TransferStateView(state)
         }
     }
 }
@@ -259,10 +259,11 @@ private fun LanSendPanel(
 private fun LanRecvPanel(
     state: TransferState,
     lanPort: String,
+    saveDir: String,
     onPortChange: (String) -> Unit,
+    onPickSaveDir: () -> Unit,
     onStart: () -> Unit,
-    onCancel: () -> Unit,
-    onReset: () -> Unit
+    onCancel: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -281,15 +282,27 @@ private fun LanRecvPanel(
 
             Spacer(Modifier.height(8.dp))
 
-            // 开始按钮在传输中变为取消按钮
+            // 保存目录显示 + 选择按钮
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "保存到: $saveDir",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = onPickSaveDir) {
+                    Icon(Icons.Default.Folder, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text("更改")
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
             if (state is TransferState.Connecting || state is TransferState.Transferring) {
-                Button(
-                    onClick = onCancel,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    )
-                ) { Text("取消") }
+                CancelButton(onCancel)
             } else {
                 Button(
                     onClick = onStart,
@@ -297,7 +310,7 @@ private fun LanRecvPanel(
                 ) { Text("开始接收") }
             }
 
-            TransferStateView(state, onCancel, onReset)
+            TransferStateView(state)
         }
     }
 }
@@ -310,8 +323,7 @@ private fun RelaySendPanel(
     onFilePathChange: (String) -> Unit,
     onPickFile: () -> Unit,
     onStart: () -> Unit,
-    onCancel: () -> Unit,
-    onReset: () -> Unit
+    onCancel: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -338,13 +350,7 @@ private fun RelaySendPanel(
             // 开始按钮在传输中变为取消按钮 (含等待对方加入)
             if (state is TransferState.Connecting || state is TransferState.Transferring ||
                 state is TransferState.WaitingForPeer) {
-                Button(
-                    onClick = onCancel,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    )
-                ) { Text("取消") }
+                CancelButton(onCancel)
             } else {
                 Button(
                     onClick = onStart,
@@ -353,7 +359,7 @@ private fun RelaySendPanel(
                 ) { Text("创建房间并发送") }
             }
 
-            TransferStateView(state, onCancel, onReset)
+            TransferStateView(state)
         }
     }
 }
@@ -363,10 +369,11 @@ private fun RelaySendPanel(
 private fun RelayRecvPanel(
     state: TransferState,
     roomCode: String,
+    saveDir: String,
     onRoomCodeChange: (String) -> Unit,
+    onPickSaveDir: () -> Unit,
     onStart: () -> Unit,
-    onCancel: () -> Unit,
-    onReset: () -> Unit
+    onCancel: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -389,15 +396,27 @@ private fun RelayRecvPanel(
 
             Spacer(Modifier.height(8.dp))
 
-            // 开始按钮在传输中变为取消按钮
+            // 保存目录显示 + 选择按钮
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "保存到: $saveDir",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = onPickSaveDir) {
+                    Icon(Icons.Default.Folder, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text("更改")
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
             if (state is TransferState.Connecting || state is TransferState.Transferring) {
-                Button(
-                    onClick = onCancel,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    )
-                ) { Text("取消") }
+                CancelButton(onCancel)
             } else {
                 Button(
                     onClick = onStart,
@@ -406,18 +425,26 @@ private fun RelayRecvPanel(
                 ) { Text("加入房间并接收") }
             }
 
-            TransferStateView(state, onCancel, onReset)
+            TransferStateView(state)
         }
     }
 }
 
-// ===== 传输状态视图 (进度/完成/错误) =====
+// ===== 取消按钮 (红色) =====
 @Composable
-private fun TransferStateView(
-    state: TransferState,
-    onCancel: () -> Unit,
-    onReset: () -> Unit
-) {
+private fun CancelButton(onCancel: () -> Unit) {
+    Button(
+        onClick = onCancel,
+        modifier = Modifier.fillMaxWidth(),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.error
+        )
+    ) { Text("取消") }
+}
+
+// ===== 传输状态视图 (进度/完成/错误, 无返回按钮) =====
+@Composable
+private fun TransferStateView(state: TransferState) {
     Spacer(modifier = Modifier.height(12.dp))
     when (state) {
         is TransferState.Idle -> {}
@@ -467,13 +494,11 @@ private fun TransferStateView(
         }
 
         is TransferState.Done -> {
-            Text("传输完成", color = MaterialTheme.colorScheme.primary)
-            Button(onClick = onReset) { Text("返回") }
+            Text("✓ 传输完成", color = MaterialTheme.colorScheme.primary)
         }
 
         is TransferState.Canceled -> {
             Text("已取消", color = MaterialTheme.colorScheme.tertiary)
-            Button(onClick = onReset) { Text("返回") }
         }
 
         is TransferState.Error -> {
@@ -481,7 +506,6 @@ private fun TransferStateView(
                 "错误: ${state.message} (code=${state.code})",
                 color = MaterialTheme.colorScheme.error
             )
-            Button(onClick = onReset) { Text("返回") }
         }
     }
 }

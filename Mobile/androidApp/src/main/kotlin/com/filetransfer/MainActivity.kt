@@ -1,5 +1,6 @@
 package com.filetransfer
 
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.DocumentsContract
@@ -20,11 +21,13 @@ class MainActivity : ComponentActivity() {
     // 文件路径状态 (供 Compose UI 观察和更新)
     private val filePathState = mutableStateOf("")
 
+    // 默认保存目录 (app 专用 received 文件夹)
+    private lateinit var defaultSaveDir: File
+
     private val pickFileLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
         uri?.let {
-            // 将 content:// URI 复制到缓存目录, 获取实际文件路径
             val path = copyUriToTempFile(it)
             if (path != null) {
                 filePathState.value = path
@@ -34,9 +37,33 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // 目录选择器 (OpenDocumentTree 支持自定义保存位置)
+    private val pickDirLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        uri?.let {
+            // 持久化 URI 权限
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            contentResolver.takePersistableUriPermission(it, flags)
+
+            // 保存 URI 到 service
+            transferService.setCustomSaveDir(it.toString())
+            Toast.makeText(this, "已设置自定义保存目录", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        transferService = TransferService()
+
+        // 初始化默认保存目录: app 外部专用目录/files/received/
+        defaultSaveDir = File(getExternalFilesDir(null), "received").apply {
+            if (!exists()) mkdirs()
+        }
+
+        transferService = TransferService().apply {
+            saveDir = defaultSaveDir.absolutePath
+        }
 
         setContent {
             TransferScreen(
@@ -44,11 +71,8 @@ class MainActivity : ComponentActivity() {
                 filePath = filePathState.value,
                 onFilePathChange = { filePathState.value = it },
                 onPickFile = { pickFileLauncher.launch("*/*") },
-                saveDirProvider = {
-                    // 保存到应用外部专用目录 (无需存储权限)
-                    getExternalFilesDir(null)?.absolutePath
-                        ?: filesDir.absolutePath
-                }
+                saveDirProvider = { transferService.saveDir },
+                onPickSaveDir = { pickDirLauncher.launch(null) }
             )
         }
     }

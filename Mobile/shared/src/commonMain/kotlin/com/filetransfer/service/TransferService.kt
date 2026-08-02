@@ -21,6 +21,13 @@ class TransferService {
     // 局域网直连端口 (默认 9090, 与 PC 端一致)
     var lanPort: Int = 9090
 
+    // 默认保存目录 (接收文件存放位置)
+    var saveDir: String = ""
+
+    // 自定义保存目录 (通过系统选择器选择, URI 字符串)
+    private val _customSaveDirUri = MutableStateFlow<String?>(null)
+    val customSaveDirUri: StateFlow<String?> = _customSaveDirUri.asStateFlow()
+
     // 中继服务器地址: 默认从 C++ 加密配置读取, 用户可通过高级设置覆盖
     var relayHost: String = ""
         private set
@@ -66,6 +73,11 @@ class TransferService {
         }
     }
 
+    // 设置自定义保存目录 (URI 字符串); 传空则清除
+    fun setCustomSaveDir(uri: String?) {
+        _customSaveDirUri.value = uri
+    }
+
     // 获取当前生效的中继服务器地址
     fun effectiveRelayHost(): String =
         if (useCustomRelay) customRelayHost else relayHost
@@ -79,6 +91,14 @@ class TransferService {
 
     fun clearLogs() {
         _logs.value = emptyList()
+    }
+
+    // ===== 自动重置 (Canceled/Done/Error 后回到 Idle, 保留日志) =====
+    private fun autoReset(delayMs: Long = 1500) {
+        CoroutineScope(Dispatchers.Default).launch {
+            delay(delayMs)
+            _state.value = TransferState.Idle
+        }
     }
 
     // ===== 局域网直连: 发送 =====
@@ -106,13 +126,14 @@ class TransferService {
             val result = NativeBridge.sendFile("", port, filePath, callback)
 
             _state.value = when {
-                canceled -> TransferState.Canceled
-                result == 0 -> TransferState.Done
+                canceled -> { appendLog("[取消] 传输已取消"); TransferState.Canceled }
+                result == 0 -> { appendLog("[完成] 文件发送成功"); TransferState.Done }
                 else -> {
                     appendLog("[失败] 错误码: $result (${NativeBridge.errorString(result)})")
                     TransferState.Error(result, NativeBridge.errorString(result))
                 }
             }
+            autoReset()
         }
     }
 
@@ -148,13 +169,14 @@ class TransferService {
             val result = NativeBridge.recvFile(port, saveDir, callback)
 
             _state.value = when {
-                canceled -> TransferState.Canceled
-                result == 0 -> TransferState.Done
+                canceled -> { appendLog("[取消] 传输已取消"); TransferState.Canceled }
+                result == 0 -> { appendLog("[完成] 文件接收成功, 保存到: $saveDir"); TransferState.Done }
                 else -> {
                     appendLog("[失败] 错误码: $result (${NativeBridge.errorString(result)})")
                     TransferState.Error(result, NativeBridge.errorString(result))
                 }
             }
+            autoReset()
         }
     }
 
@@ -193,13 +215,14 @@ class TransferService {
             )
 
             _state.value = when {
-                canceled -> TransferState.Canceled
-                result == 0 -> TransferState.Done
+                canceled -> { appendLog("[取消] 传输已取消"); TransferState.Canceled }
+                result == 0 -> { appendLog("[完成] 文件发送成功"); TransferState.Done }
                 else -> {
                     appendLog("[失败] 错误码: $result (${NativeBridge.errorString(result)})")
                     TransferState.Error(result, NativeBridge.errorString(result))
                 }
             }
+            autoReset()
         }
     }
 
@@ -232,13 +255,14 @@ class TransferService {
             )
 
             _state.value = when {
-                canceled -> TransferState.Canceled
-                result == 0 -> TransferState.Done
+                canceled -> { appendLog("[取消] 传输已取消"); TransferState.Canceled }
+                result == 0 -> { appendLog("[完成] 文件接收成功, 保存到: $saveDir"); TransferState.Done }
                 else -> {
                     appendLog("[失败] 错误码: $result (${NativeBridge.errorString(result)})")
                     TransferState.Error(result, NativeBridge.errorString(result))
                 }
             }
+            autoReset()
         }
     }
 
