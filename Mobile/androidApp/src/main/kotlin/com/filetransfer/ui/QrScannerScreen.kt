@@ -16,7 +16,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -37,7 +36,6 @@ fun QrScannerScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
-    var hasScanned by remember { mutableStateOf(false) }
     var scanLineOffset by remember { mutableStateOf(0f) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val barcodeViewRef = remember { mutableStateOf<BarcodeView?>(null) }
@@ -85,17 +83,12 @@ fun QrScannerScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("扫描二维码") },
+                title = { Text("扫描二维码", color = Color.White) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.Default.ArrowBack, contentDescription = "返回", tint = Color.White)
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Black,
-                    titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White
-                )
+                }
             )
         },
         containerColor = Color.Black
@@ -112,7 +105,6 @@ fun QrScannerScreen(
                             override fun barcodeResult(result: BarcodeResult) {
                                 if (!hasScannedRef.value) {
                                     hasScannedRef.value = true
-                                    hasScanned = true
                                     result.text?.let { qr ->
                                         if (qr.isNotBlank()) {
                                             onQrCodeDetected(qr)
@@ -160,7 +152,6 @@ fun QrScannerScreen(
 @Composable
 private fun ScannerOverlay(scanProgress: Float) {
     val frameColor = Color(0xFF00E676)
-    val dashEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f))
 
     Box(modifier = Modifier.fillMaxSize()) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -205,8 +196,7 @@ private fun ScannerOverlay(scanProgress: Float) {
                 color = frameColor,
                 start = Offset(left + 10f, sy),
                 end = Offset(right - 10f, sy),
-                strokeWidth = 3f,
-                pathEffect = dashEffect
+                strokeWidth = 3f
             )
         }
     }
