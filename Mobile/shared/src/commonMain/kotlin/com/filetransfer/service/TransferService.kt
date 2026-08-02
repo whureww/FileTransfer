@@ -188,7 +188,9 @@ class TransferService {
                 }
             }
 
-            val result = NativeBridge.relaySendFile(host, port, filePath, callback)
+            val result = NativeBridge.relaySendFile(
+                effectiveRelayHost(), effectiveRelayPort(), filePath, callback
+            )
 
             _state.value = when {
                 canceled -> TransferState.Canceled
@@ -225,7 +227,9 @@ class TransferService {
                 }
             }
 
-            val result = NativeBridge.relayRecvFile(host, port, roomCode, saveDir, callback)
+            val result = NativeBridge.relayRecvFile(
+                effectiveRelayHost(), effectiveRelayPort(), roomCode, saveDir, callback
+            )
 
             _state.value = when {
                 canceled -> TransferState.Canceled
