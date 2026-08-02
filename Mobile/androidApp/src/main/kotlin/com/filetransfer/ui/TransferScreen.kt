@@ -1,11 +1,12 @@
 package com.filetransfer.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -13,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -21,6 +23,12 @@ import com.filetransfer.model.ConnMode
 import com.filetransfer.model.TransferMode
 import com.filetransfer.model.TransferState
 import com.filetransfer.service.TransferService
+
+// 底部导航栏项
+private enum class BottomTab(val label: String, val icon: ImageVector) {
+    SEND("发送文件", Icons.Default.Send),
+    RECV("接收文件", Icons.Default.Download)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -35,7 +43,8 @@ fun TransferScreen(
     val logs by service.logs.collectAsState()
 
     var connMode by rememberSaveable { mutableStateOf(ConnMode.LAN) }
-    var transferMode by rememberSaveable { mutableStateOf(TransferMode.SEND) }
+    var bottomTab by rememberSaveable { mutableStateOf(BottomTab.SEND) }
+    val transferMode = if (bottomTab == BottomTab.SEND) TransferMode.SEND else TransferMode.RECV
 
     // 中继模式: 房间码
     var roomCode by rememberSaveable { mutableStateOf("") }
@@ -65,6 +74,19 @@ fun TransferScreen(
                     }
                 }
             )
+        },
+        bottomBar = {
+            NavigationBar {
+                BottomTab.entries.forEach { tab ->
+                    NavigationBarItem(
+                        selected = bottomTab == tab,
+                        onClick = { if (!isBusy) bottomTab = tab },
+                        icon = { Icon(tab.icon, contentDescription = null) },
+                        label = { Text(tab.label) },
+                        enabled = !isBusy
+                    )
+                }
+            }
         }
     ) { padding ->
         Column(
@@ -72,47 +94,24 @@ fun TransferScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+                .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
-            // ===== 连接模式切换 =====
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
+            // ===== 顶部连接模式切换 (局域网 / 房间码中继) =====
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                SegmentedButton(
                     selected = connMode == ConnMode.LAN,
                     onClick = { if (!isBusy) connMode = ConnMode.LAN },
-                    label = { Text("局域网直连") },
-                    modifier = Modifier.weight(1f)
-                )
-                FilterChip(
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                ) {
+                    Text("局域网直连")
+                }
+                SegmentedButton(
                     selected = connMode == ConnMode.RELAY,
                     onClick = { if (!isBusy) connMode = ConnMode.RELAY },
-                    label = { Text("房间码中继") },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // ===== 发送/接收切换 =====
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = transferMode == TransferMode.SEND,
-                    onClick = { if (!isBusy) transferMode = TransferMode.SEND },
-                    label = { Text("发送") },
-                    modifier = Modifier.weight(1f)
-                )
-                FilterChip(
-                    selected = transferMode == TransferMode.RECV,
-                    onClick = { if (!isBusy) transferMode = TransferMode.RECV },
-                    label = { Text("接收") },
-                    modifier = Modifier.weight(1f)
-                )
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                ) {
+                    Text("房间码中继")
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -202,9 +201,9 @@ private fun LanSendPanel(
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text("发送文件 (自动发现接收端)", style = MaterialTheme.typography.titleSmall)
+            Text("局域网发送 (自动发现接收端)", style = MaterialTheme.typography.titleMedium)
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
 
             OutlinedTextField(
                 value = lanPort,
@@ -257,9 +256,9 @@ private fun LanRecvPanel(
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text("接收文件 (局域网直连)", style = MaterialTheme.typography.titleSmall)
+            Text("局域网接收 (等待发送方连接)", style = MaterialTheme.typography.titleMedium)
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
 
             OutlinedTextField(
                 value = lanPort,
@@ -297,9 +296,9 @@ private fun RelaySendPanel(
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text("中继发送 (创建房间)", style = MaterialTheme.typography.titleSmall)
+            Text("中继发送 (创建房间)", style = MaterialTheme.typography.titleMedium)
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
 
             OutlinedButton(onClick = onPickFile, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.AttachFile, contentDescription = null)
@@ -342,9 +341,9 @@ private fun RelayRecvPanel(
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text("中继接收 (输入房间码)", style = MaterialTheme.typography.titleSmall)
+            Text("中继接收 (输入房间码)", style = MaterialTheme.typography.titleMedium)
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
 
             OutlinedTextField(
                 value = roomCode,
