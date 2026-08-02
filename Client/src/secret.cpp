@@ -1,6 +1,8 @@
 #include "secret.h"
 
 #include <cstring>
+#include <algorithm>
+#include <string>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -61,9 +63,35 @@ std::vector<std::string> get_local_ipv4_addresses() {
         std::free(pAddrs);
         return result;
     }
+
+    // 分两批: 优先收集真实物理网卡 IP, 虚拟网卡 IP 放后面
+    std::vector<std::string> primary;
+    std::vector<std::string> secondary;
+
     for (PIP_ADAPTER_ADDRESSES pCur = pAddrs; pCur; pCur = pCur->Next) {
         if (pCur->OperStatus != IfOperStatusUp) continue;
         if (pCur->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+
+        // 判断是否为虚拟网卡 (通过描述/友好名称关键词)
+        std::wstring desc = pCur->Description ? pCur->Description : L"";
+        std::wstring fname = pCur->FriendlyName ? pCur->FriendlyName : L"";
+        std::wstring combined = desc + L" " + fname;
+        std::transform(combined.begin(), combined.end(),
+                       combined.begin(), ::towlower);
+
+        bool is_virtual = false;
+        const wchar_t* virtual_keywords[] = {
+            L"vmware", l"virtualbox", l"virtual", l"hyper-v",
+            l"wsl", l"docker", l"loopback", l"tunnel",
+            l"bluetooth", l"vpn"
+        };
+        for (auto kw : virtual_keywords) {
+            if (combined.find(kw) != std::wstring::npos) {
+                is_virtual = true;
+                break;
+            }
+        }
+
         for (PIP_ADAPTER_UNICAST_ADDRESS pUni = pCur->FirstUnicastAddress; pUni; pUni = pUni->Next) {
             sockaddr* sa = pUni->Address.lpSockaddr;
             if (!sa || sa->sa_family != AF_INET) continue;
@@ -73,10 +101,19 @@ std::vector<std::string> get_local_ipv4_addresses() {
             std::string ipstr(ip);
             // 跳过 APIPA (169.254.x.x)
             if (ipstr.rfind("169.254.", 0) == 0) continue;
-            result.push_back(ipstr);
+
+            if (is_virtual) {
+                secondary.push_back(ipstr);
+            } else {
+                primary.push_back(ipstr);
+            }
         }
     }
     std::free(pAddrs);
+
+    // 真实网卡 IP 优先, 虚拟网卡 IP 在后
+    result.insert(result.end(), primary.begin(), primary.end());
+    result.insert(result.end(), secondary.begin(), secondary.end());
 #else
     struct ifaddrs* ifap = nullptr;
     if (getifaddrs(&ifap) != 0) return result;
