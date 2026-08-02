@@ -1,34 +1,174 @@
 package com.filetransfer.service
 
-import com.filetransfer.model.TransferMode
 import com.filetransfer.model.TransferState
 import com.filetransfer.protocol.NativeBridge
 import com.filetransfer.protocol.ProgressCallback
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
-// 传输服务: 管理文件传输的生命周期
-// 被各平台 UI 共享, 通过 StateFlow 暴露状态
+// 传输服务: 管理局域网直连 / 房间码中继两种模式的文件传输
 class TransferService {
     private val _state = MutableStateFlow<TransferState>(TransferState.Idle)
     val state: StateFlow<TransferState> = _state.asStateFlow()
 
+    // 日志流 (UI 层观察并追加到日志窗口)
+    private val _logs = MutableStateFlow<List<String>>(emptyList())
+    val logs: StateFlow<List<String>> = _logs.asStateFlow()
+
     private var transferJob: Job? = null
     private var canceled = false
 
-    // 中继服务器地址 (UI 层可配置)
-    var relayHost: String = "your-relay-server.com"
-    var relayPort: Int = 9091
+    // 局域网直连端口 (默认 9090, 与 PC 端一致)
+    var lanPort: Int = 9090
+
+    // 中继服务器地址: 默认从 C++ 加密配置读取, 用户可通过高级设置覆盖
+    var relayHost: String = ""
+        private set
+    var relayPort: Int = 0
+        private set
+    // 是否使用自定义中继服务器 (高级设置)
+    var useCustomRelay: Boolean = false
+        private set
+    private var customRelayHost: String = ""
+    private var customRelayPort: Int = 0
 
     init {
         NativeBridge.initNetwork()
+        // 从 C++ 加密配置加载默认中继服务器地址
+        loadDefaultRelayAddr()
     }
 
-    // 发送文件
-    fun sendFile(filePath: String) {
-        if (transferJob?.isActive == true) return
+    private fun loadDefaultRelayAddr() {
+        val addr = NativeBridge.getRelayAddr()
+        if (addr.isNotEmpty()) {
+            val parts = addr.split(":")
+            if (parts.size == 2) {
+                relayHost = parts[0]
+                relayPort = parts[1].toIntOrNull() ?: 9091
+            }
+        }
+        if (relayHost.isEmpty()) {
+            relayHost = "127.0.0.1"
+            relayPort = 9091
+        }
+    }
 
+    // 设置自定义中继服务器 (高级设置); 传空则恢复默认
+    fun setCustomRelay(host: String?, port: Int?) {
+        if (host.isNullOrEmpty() || port == null || port <= 0) {
+            useCustomRelay = false
+            customRelayHost = ""
+            customRelayPort = 0
+        } else {
+            useCustomRelay = true
+            customRelayHost = host
+            customRelayPort = port
+        }
+    }
+
+    // 获取当前生效的中继服务器地址
+    fun effectiveRelayHost(): String =
+        if (useCustomRelay) customRelayHost else relayHost
+    fun effectiveRelayPort(): Int =
+        if (useCustomRelay) customRelayPort else relayPort
+
+    // ===== 日志 =====
+    private fun appendLog(msg: String) {
+        _logs.value = _logs.value + msg
+    }
+
+    fun clearLogs() {
+        _logs.value = emptyList()
+    }
+
+    // ===== 局域网直连: 发送 =====
+    fun sendFileLan(filePath: String, port: Int = lanPort) {
+        if (transferJob?.isActive == true) return
         canceled = false
+        clearLogs()
+        appendLog("========== 发送文件 (局域网自动发现) ==========")
+
+        transferJob = CoroutineScope(Dispatchers.Default).launch {
+            _state.value = TransferState.Connecting
+
+            val callback = object : ProgressCallback {
+                override fun onProgress(done: Long, total: Long, message: String): Boolean {
+                    if (total > 0) {
+                        _state.value = TransferState.Transferring(done, total, message)
+                    } else if (message.isNotEmpty()) {
+                        appendLog(message)
+                    }
+                    return !canceled
+                }
+            }
+
+            // ip 传空字符串 → C++ 端自动发现接收端
+            val result = NativeBridge.sendFile("", port, filePath, callback)
+
+            _state.value = when {
+                canceled -> TransferState.Canceled
+                result == 0 -> TransferState.Done
+                else -> {
+                    appendLog("[失败] 错误码: $result (${NativeBridge.errorString(result)})")
+                    TransferState.Error(result, NativeBridge.errorString(result))
+                }
+            }
+        }
+    }
+
+    // ===== 局域网直连: 接收 =====
+    fun recvFileLan(saveDir: String, port: Int = lanPort) {
+        if (transferJob?.isActive == true) return
+        canceled = false
+        clearLogs()
+        appendLog("========== 接收文件 (局域网直连) ==========")
+
+        // 显示本机 IP 供发送方参考
+        val ips = NativeBridge.getLocalIps()
+        if (ips.isNotEmpty()) {
+            appendLog("本机 IP 地址:")
+            ips.split("\n").forEach { appendLog("  $it:$port") }
+        }
+        appendLog("已开启局域网自动发现, 等待发送端连接...")
+
+        transferJob = CoroutineScope(Dispatchers.Default).launch {
+            _state.value = TransferState.Connecting
+
+            val callback = object : ProgressCallback {
+                override fun onProgress(done: Long, total: Long, message: String): Boolean {
+                    if (total > 0) {
+                        _state.value = TransferState.Transferring(done, total, message)
+                    } else if (message.isNotEmpty()) {
+                        appendLog(message)
+                    }
+                    return !canceled
+                }
+            }
+
+            val result = NativeBridge.recvFile(port, saveDir, callback)
+
+            _state.value = when {
+                canceled -> TransferState.Canceled
+                result == 0 -> TransferState.Done
+                else -> {
+                    appendLog("[失败] 错误码: $result (${NativeBridge.errorString(result)})")
+                    TransferState.Error(result, NativeBridge.errorString(result))
+                }
+            }
+        }
+    }
+
+    // ===== 房间码中继: 发送 (创建房间) =====
+    fun sendFileRelay(filePath: String) {
+        if (transferJob?.isActive == true) return
+        canceled = false
+        clearLogs()
+        appendLog("========== 中继发送 (创建房间) ==========")
+
+        val host = effectiveRelayHost()
+        val port = effectiveRelayPort()
+        appendLog("[信息] 中继服务器: $host:$port")
+
         transferJob = CoroutineScope(Dispatchers.Default).launch {
             _state.value = TransferState.Connecting
 
@@ -38,30 +178,43 @@ class TransferService {
                     if (message.startsWith("[房间码]")) {
                         val code = message.substringAfter("[房间码]").trim()
                         _state.value = TransferState.WaitingForPeer(code)
+                        appendLog("[房间码] $code  (将此房间码告知接收方)")
                         return !canceled
                     }
                     if (total > 0) {
                         _state.value = TransferState.Transferring(done, total, message)
+                    } else if (message.isNotEmpty()) {
+                        appendLog(message)
                     }
                     return !canceled
                 }
             }
 
-            val result = NativeBridge.relaySendFile(relayHost, relayPort, filePath, callback)
+            val result = NativeBridge.relaySendFile(host, port, filePath, callback)
 
             _state.value = when {
                 canceled -> TransferState.Canceled
                 result == 0 -> TransferState.Done
-                else -> TransferState.Error(result, NativeBridge.errorString(result))
+                else -> {
+                    appendLog("[失败] 错误码: $result (${NativeBridge.errorString(result)})")
+                    TransferState.Error(result, NativeBridge.errorString(result))
+                }
             }
         }
     }
 
-    // 接收文件
-    fun recvFile(roomCode: String, saveDir: String) {
+    // ===== 房间码中继: 接收 (加入房间) =====
+    fun recvFileRelay(roomCode: String, saveDir: String) {
         if (transferJob?.isActive == true) return
-
         canceled = false
+        clearLogs()
+        appendLog("========== 中继接收 (加入房间) ==========")
+
+        val host = effectiveRelayHost()
+        val port = effectiveRelayPort()
+        appendLog("[信息] 中继服务器: $host:$port")
+        appendLog("[信息] 房间码: $roomCode")
+
         transferJob = CoroutineScope(Dispatchers.Default).launch {
             _state.value = TransferState.Connecting
 
@@ -69,17 +222,22 @@ class TransferService {
                 override fun onProgress(done: Long, total: Long, message: String): Boolean {
                     if (total > 0) {
                         _state.value = TransferState.Transferring(done, total, message)
+                    } else if (message.isNotEmpty()) {
+                        appendLog(message)
                     }
                     return !canceled
                 }
             }
 
-            val result = NativeBridge.relayRecvFile(relayHost, relayPort, roomCode, saveDir, callback)
+            val result = NativeBridge.relayRecvFile(host, port, roomCode, saveDir, callback)
 
             _state.value = when {
                 canceled -> TransferState.Canceled
                 result == 0 -> TransferState.Done
-                else -> TransferState.Error(result, NativeBridge.errorString(result))
+                else -> {
+                    appendLog("[失败] 错误码: $result (${NativeBridge.errorString(result)})")
+                    TransferState.Error(result, NativeBridge.errorString(result))
+                }
             }
         }
     }
@@ -87,6 +245,7 @@ class TransferService {
     // 取消当前传输
     fun cancel() {
         canceled = true
+        appendLog("[取消] 正在终止传输...")
     }
 
     // 重置为空闲状态

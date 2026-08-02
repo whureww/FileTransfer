@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.mutableStateOf
 import com.filetransfer.service.TransferService
 import com.filetransfer.ui.TransferScreen
 import java.io.File
@@ -16,14 +17,17 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var transferService: TransferService
 
+    // 文件路径状态 (供 Compose UI 观察和更新)
+    private val filePathState = mutableStateOf("")
+
     private val pickFileLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
         uri?.let {
-            // 将 URI 转为实际文件路径 (通过 DocumentsContract 或直接复制到缓存)
-            val filePath = copyUriToTempFile(it)
-            if (filePath != null) {
-                transferService.sendFile(filePath)
+            // 将 content:// URI 复制到缓存目录, 获取实际文件路径
+            val path = copyUriToTempFile(it)
+            if (path != null) {
+                filePathState.value = path
             } else {
                 Toast.makeText(this, "无法获取文件路径", Toast.LENGTH_SHORT).show()
             }
@@ -37,7 +41,14 @@ class MainActivity : ComponentActivity() {
         setContent {
             TransferScreen(
                 service = transferService,
-                onPickFile = { pickFileLauncher.launch("*/*") }
+                filePath = filePathState.value,
+                onFilePathChange = { filePathState.value = it },
+                onPickFile = { pickFileLauncher.launch("*/*") },
+                saveDirProvider = {
+                    // 保存到应用外部专用目录 (无需存储权限)
+                    getExternalFilesDir(null)?.absolutePath
+                        ?: filesDir.absolutePath
+                }
             )
         }
     }
@@ -49,7 +60,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * 将 content:// URI 指向的文件复制到应用缓存目录, 返回实际文件路径
-     * 这是因为 C++ 核心库需要实际文件路径 (ifstream), 无法直接处理 content:// URI
+     * C++ 核心库需要实际文件路径 (ifstream), 无法直接处理 content:// URI
      */
     private fun copyUriToTempFile(uri: Uri): String? {
         return try {
@@ -72,13 +83,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun getFileNameFromUri(uri: Uri): String? {
-        // 尝试 DocumentsContract
         DocumentsContract.getDocumentId(uri)?.let { documentId ->
             val split = documentId.split(":")
             if (split.size > 1) return split[1]
         }
 
-        // 尝试 OpenableColumns
         return try {
             val proj = arrayOf(android.provider.OpenableColumns.DISPLAY_NAME)
             contentResolver.query(uri, proj, null, null, null)?.use { cursor ->

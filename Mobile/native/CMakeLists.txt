@@ -12,6 +12,7 @@ add_library(filetransfer_native SHARED
     ${FT_CORE_DIR}/file_transfer.cpp
     ${FT_CORE_DIR}/relay_client.cpp
     ${FT_CORE_DIR}/socket_util.cpp
+    ${FT_CORE_DIR}/secret.cpp
     ${FT_CORE_DIR}/jni_bridge.cpp
 )
 
