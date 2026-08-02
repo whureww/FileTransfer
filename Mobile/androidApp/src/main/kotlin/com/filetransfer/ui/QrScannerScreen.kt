@@ -2,9 +2,14 @@ package com.filetransfer.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.Rect
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -22,12 +27,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import com.journeyapps.barcodescanner.BarcodeView
-import com.journeyapps.barcodescanner.BarcodeCallback
-import com.journeyapps.barcodescanner.BarcodeResult
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.BinaryBitmap
+import com.google.zxing.DecodeHintType
+import com.google.zxing.PlanarYUVLuminanceSource
+import com.google.zxing.common.HybridBinarizer
+import com.google.zxing.qrcode.QRCodeReader
 import kotlinx.coroutines.delay
+import java.nio.ByteBuffer
+import java.util.concurrent.Executors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,8 +46,8 @@ fun QrScannerScreen(
     val context = LocalContext.current
     var scanLineOffset by remember { mutableStateOf(0f) }
     val lifecycleOwner = LocalLifecycleOwner.current
-    val barcodeViewRef = remember { mutableStateOf<BarcodeView?>(null) }
-    val hasScannedRef = remember { mutableStateOf(false) }
+    var hasScanned by remember { mutableStateOf(false) }
+    val executor = remember { Executors.newSingleThreadExecutor() }
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -66,27 +74,18 @@ fun QrScannerScreen(
     }
 
     DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_RESUME -> barcodeViewRef.value?.resume()
-                Lifecycle.Event.ON_PAUSE -> barcodeViewRef.value?.pause()
-                else -> {}
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            barcodeViewRef.value?.pause()
+            executor.shutdown()
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("扫描二维码", color = Color.White) },
+                title = { Text("扫描二维码") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "返回", tint = Color.White)
+                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
                     }
                 }
             )
@@ -100,36 +99,39 @@ fun QrScannerScreen(
         ) {
             AndroidView(
                 factory = { ctx ->
-                    BarcodeView(ctx).apply {
-                        decodeContinuous(object : BarcodeCallback {
-                            override fun barcodeResult(result: BarcodeResult) {
-                                if (!hasScannedRef.value) {
-                                    hasScannedRef.value = true
-                                    result.text?.let { qr ->
-                                        if (qr.isNotBlank()) {
-                                            onQrCodeDetected(qr)
-                                        }
-                                    }
-                                }
+                    PreviewView(ctx).apply {
+                        scaleType = PreviewView.ScaleType.FILL_CENTER
+                        implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                        // Bind camera
+                        val future = ProcessCameraProvider.getInstance(ctx)
+                        future.addListener({
+                            val provider = future.get()
+                            val preview = Preview.Builder().build().also {
+                                it.setSurfaceProvider(surfaceProvider)
                             }
-                            override fun possibleResultPoints(
-                                points: List<com.google.zxing.ResultPoint>
-                            ) {}
-                        })
-                    }
-                },
-                update = { barcodeView ->
-                    barcodeViewRef.value = barcodeView
-                    barcodeView.post {
-                        val w = barcodeView.width
-                        val h = barcodeView.height
-                        if (w > 0 && h > 0) {
-                            val frameSize = (minOf(w, h) * 0.75).toInt()
-                            val left = (w - frameSize) / 2
-                            val top = (h - frameSize) / 2
-                            val rect = Rect(left, top, left + frameSize, top + frameSize)
-                            barcodeView.setFramingRect(rect)
-                        }
+
+                            val analysis = ImageAnalysis.Builder()
+                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                                .build()
+                                .also { analysis ->
+                                    analysis.setAnalyzer(executor, QrAnalyzer { result ->
+                                        if (!hasScanned && result.isNotBlank()) {
+                                            hasScanned = true
+                                            onQrCodeDetected(result)
+                                        }
+                                    })
+                                }
+
+                            val selector = CameraSelector.DEFAULT_BACK_CAMERA
+
+                            provider.unbindAll()
+                            provider.bindToLifecycle(
+                                lifecycleOwner,
+                                selector,
+                                preview,
+                                analysis
+                            )
+                        }, ContextCompat.getMainExecutor(ctx))
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -145,6 +147,48 @@ fun QrScannerScreen(
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 60.dp)
             )
+        }
+    }
+}
+
+/**
+ * CameraX ImageAnalysis.Analyzer for QR code detection using zxing core
+ */
+private class QrAnalyzer(
+    private val onQrDetected: (String) -> Unit
+) : ImageAnalysis.Analyzer {
+
+    private val reader = QRCodeReader()
+    private val hints = mapOf(
+        DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
+        DecodeHintType.CHARACTER_SET to "UTF-8"
+    )
+
+    override fun analyze(image: ImageProxy) {
+        try {
+            val buffer: ByteBuffer = image.planes[0].buffer
+            val data = ByteArray(buffer.remaining())
+            buffer.get(data)
+
+            val width = image.width
+            val height = image.height
+
+            // YUV to luminance source (zxing expects NV21/YUV format)
+            val source = PlanarYUVLuminanceSource(
+                data, width, height, 0, 0, width, height, false
+            )
+
+            val bitmap = BinaryBitmap(HybridBinarizer(source))
+            val result = reader.decode(bitmap, hints)
+            result?.text?.let { text ->
+                if (text.isNotBlank()) {
+                    onQrDetected(text)
+                }
+            }
+        } catch (_: Exception) {
+            // No QR code found in this frame, continue
+        } finally {
+            image.close()
         }
     }
 }

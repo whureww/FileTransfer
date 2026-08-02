@@ -80,8 +80,14 @@ dependencies {
     // Kotlin Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     
-    // ZXing 条码/二维码扫描
-    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    // CameraX 相机预览
+    implementation("androidx.camera:camera-core:1.3.1")
+    implementation("androidx.camera:camera-camera2:1.3.1")
+    implementation("androidx.camera:camera-lifecycle:1.3.1")
+    implementation("androidx.camera:camera-view:1.3.1")
+
+    // ZXing Core 二维码解码
+    implementation("com.google.zxing:core:3.5.3")
     
     // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")
