@@ -385,31 +385,43 @@ private fun TransferStateView(
         is TransferState.Idle -> {}
 
         is TransferState.Connecting -> {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                Spacer(Modifier.width(12.dp))
-                Text("正在连接...")
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Text("正在连接...")
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+                    Text("取消")
+                }
             }
         }
 
         is TransferState.WaitingForPeer -> {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text("房间码", fontSize = 14.sp)
-                    Text(
-                        state.roomCode,
-                        fontSize = 40.sp,
-                        letterSpacing = 6.sp
+            Column {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
                     )
-                    Text("将此房间码告知接收方", style = MaterialTheme.typography.bodySmall)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("房间码", fontSize = 14.sp)
+                        Text(
+                            state.roomCode,
+                            fontSize = 40.sp,
+                            letterSpacing = 6.sp
+                        )
+                        Text("将此房间码告知接收方", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+                    Text("取消")
                 }
             }
         }
@@ -506,12 +518,6 @@ private fun AdvancedRelayDialog(
         title = { Text("高级设置 - 自定义中继服务器") },
         text = {
             Column {
-                Text(
-                    "默认中继服务器: ${service.relayHost}:${service.relayPort}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = host,
                     onValueChange = { host = it },

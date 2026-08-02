@@ -165,9 +165,7 @@ class TransferService {
         clearLogs()
         appendLog("========== 中继发送 (创建房间) ==========")
 
-        val host = effectiveRelayHost()
-        val port = effectiveRelayPort()
-        appendLog("[信息] 中继服务器: $host:$port")
+        appendLog("[信息] 正在连接中继服务器...")
 
         transferJob = CoroutineScope(Dispatchers.Default).launch {
             _state.value = TransferState.Connecting
@@ -210,9 +208,7 @@ class TransferService {
         clearLogs()
         appendLog("========== 中继接收 (加入房间) ==========")
 
-        val host = effectiveRelayHost()
-        val port = effectiveRelayPort()
-        appendLog("[信息] 中继服务器: $host:$port")
+        appendLog("[信息] 正在连接中继服务器...")
         appendLog("[信息] 房间码: $roomCode")
 
         transferJob = CoroutineScope(Dispatchers.Default).launch {
