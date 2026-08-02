@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 启动屏主题: 纯色背景, 无渐变 -->
+    <style name="Theme.FileTransfer.Splash" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/splash_background</item>
+        <item name="android:statusBarColor">@color/splash_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+
+    <!-- 主应用主题 -->
+    <style name="Theme.FileTransfer" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@color/brand_primary</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

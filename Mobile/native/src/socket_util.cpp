@@ -17,6 +17,7 @@ std::string error_string(int code) {
         case ERR_CONNECT:     return "连接失败";
         case ERR_BIND:        return "绑定端口失败";
         case ERR_LISTEN:      return "监听失败";
+        case ERR_ACCEPT:      return "accept 失败";
         case ERR_RECV_HDR:    return "接收头部失败";
         case ERR_BAD_MAGIC:   return "协议魔数/版本不匹配";
         case ERR_BAD_NAME:    return "文件名长度异常";
@@ -27,6 +28,7 @@ std::string error_string(int code) {
         case ERR_WRITE_FILE:  return "写入文件失败";
         case ERR_SEND_DATA:   return "发送数据失败";
         case ERR_READ_FILE:   return "读取文件失败";
+        case ERR_SEND_NAME:   return "发送文件名失败";
         case ERR_RELAY_LINE:  return "中继协议通信失败";
         case ERR_RELAY_CODE:  return "房间码格式错误";
         case ERR_RELAY_ROOM:  return "房间不存在或已满";

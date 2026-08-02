@@ -130,6 +130,18 @@ int send_file(const std::string& ip, unsigned short port,
 int recv_file(unsigned short port, const std::string& output_dir,
               ProgressCallback cb = nullptr);
 
+// 服务模式: 在 port 上监听, 等待客户端连接, 将 filepath 发送给客户端
+// 用于二维码发送场景 (PC 作为服务端, 手机扫码后连接接收文件)
+// 返回 0 表示成功, CANCELED 表示取消, 其他非 0 表示错误
+int serve_file(unsigned short port, const std::string& filepath,
+               ProgressCallback cb = nullptr);
+
+// 客户端接收模式: 连接到 ip:port, 接收文件并保存到 output_dir
+// 用于二维码接收场景 (手机作为客户端连接 PC 端接收文件)
+// 返回 0 表示成功, CANCELED 表示取消, 其他非 0 表示错误
+int connect_recv(const std::string& ip, unsigned short port,
+                 const std::string& output_dir, ProgressCallback cb = nullptr);
+
 // ===== 局域网自动发现 (UDP 广播) =====
 // 发现协议:
 //   发送端 → 255.255.255.255:DISCOVERY_PORT (UDP): "FT_DISCOVER\n"

@@ -11,6 +11,8 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -18,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -71,7 +74,20 @@ fun TransferScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("FileTransfer v0.0.8") },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "FileTransfer",
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "v0.0.8",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
                 actions = {
                     if (connMode == ConnMode.RELAY) {
                         IconButton(
@@ -467,9 +483,9 @@ private fun TransferStateView(state: TransferState) {
 
         is TransferState.Connecting -> {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(12.dp))
-                Text("正在连接...")
+                Text("正在连接...", style = MaterialTheme.typography.bodyMedium)
             }
         }
 
@@ -484,13 +500,18 @@ private fun TransferStateView(state: TransferState) {
                     modifier = Modifier.padding(20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("房间码", fontSize = 14.sp)
+                    Text("房间码", fontSize = 13.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    Spacer(Modifier.height(4.dp))
                     Text(
                         state.roomCode,
-                        fontSize = 40.sp,
-                        letterSpacing = 6.sp
+                        fontSize = 36.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 6.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
-                    Text("将此房间码告知接收方", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(4.dp))
+                    Text("将此房间码告知接收方", style = MaterialTheme.typography.bodySmall,
+                         color = MaterialTheme.colorScheme.onPrimaryContainer)
                 }
             }
         }
@@ -501,27 +522,75 @@ private fun TransferStateView(state: TransferState) {
             else 0f
             LinearProgressIndicator(
                 progress = { progress },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
             )
-            Text("${formatBytes(state.done)} / ${formatBytes(state.total)}")
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    "${formatBytes(state.done)} / ${formatBytes(state.total)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    "${(progress * 100).toInt()}%",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium
+                )
+            }
             if (state.message.isNotEmpty()) {
-                Text(state.message, style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(2.dp))
+                Text(state.message, style = MaterialTheme.typography.bodySmall,
+                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
 
         is TransferState.Done -> {
-            Text("✓ 传输完成", color = MaterialTheme.colorScheme.primary)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("传输完成", color = MaterialTheme.colorScheme.primary,
+                     fontWeight = FontWeight.Medium)
+            }
         }
 
         is TransferState.Canceled -> {
-            Text("已取消", color = MaterialTheme.colorScheme.tertiary)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("已取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
 
         is TransferState.Error -> {
-            Text(
-                "错误: ${state.message} (code=${state.code})",
-                color = MaterialTheme.colorScheme.error
-            )
+            Row(verticalAlignment = Alignment.Top) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.error
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "错误: ${state.message} (code=${state.code})",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
     }
 }
@@ -569,24 +638,26 @@ private fun AdvancedRelayDialog(
     service: TransferService,
     onDismiss: () -> Unit
 ) {
-    var host by remember {
-        mutableStateOf(if (service.useCustomRelay) service.effectiveRelayHost() else "")
-    }
-    var port by remember {
-        mutableStateOf(
-            if (service.useCustomRelay) service.effectiveRelayPort().toString() else ""
-        )
-    }
+    var host by remember { mutableStateOf("") }
+    var port by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("高级设置 - 自定义中继服务器") },
+        title = { Text("高级设置") },
         text = {
             Column {
+                Text(
+                    if (service.useCustomRelay) "当前: 已启用自定义服务器 (不显示地址)"
+                    else "当前: 使用内置服务器 (默认)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
                     value = host,
                     onValueChange = { host = it },
                     label = { Text("中继服务器 IP") },
+                    placeholder = { Text("输入 IP 地址") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -595,6 +666,7 @@ private fun AdvancedRelayDialog(
                     value = port,
                     onValueChange = { port = it.filter { c -> c.isDigit() } },
                     label = { Text("端口") },
+                    placeholder = { Text("端口号") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth()

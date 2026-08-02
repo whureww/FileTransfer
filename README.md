@@ -1,6 +1,6 @@
 # FileTransfer
 
-跨平台文件传输工具，支持局域网直连和中继服务器转发两种模式。
+跨平台文件传输工具，支持局域网直连、中继服务器转发和二维码发送三种模式。
 
 **当前版本：v0.0.8**
 
@@ -8,6 +8,7 @@
 
 - **局域网直连**：通过 UDP 广播自动发现同局域网内的接收端，TCP 直连传输
 - **中继转发**：通过公网中继服务器跨局域网传输，使用 6 位房间码配对
+- **二维码发送**：选择文件后点击生成二维码，内嵌显示在主界面（默认隐藏，仅生成时显示）。PC 绑定本地 TCP 端口，二维码包含 IP:port，手机扫码后直连接收，**不经过中继服务器**
 - **自定义中继服务器**：发送端可设置自定义中继服务器 IP 和端口，接收端自动沿用
 - **自定义 GUI**：原生 Win32 GUI 客户端，支持拖拽、进度条、关闭确认对话框
 - **大文件支持**：协议使用 `uint64_t` 文件大小字段，理论支持 16 EB
@@ -83,11 +84,12 @@
 FileTransfer/
 ├── Client/              # GUI 客户端
 │   ├── src/
-│   │   ├── file_transfer.h/cpp   # 文件传输核心 (send_file / recv_file)
+│   │   ├── file_transfer.h/cpp   # 文件传输核心 (send_file / recv_file / serve_file / connect_recv)
 │   │   ├── socket_util.h/cpp     # 跨平台 socket 辅助函数
 │   │   ├── relay.h               # 中继协议定义
 │   │   ├── relay_client.cpp      # 中继客户端 (发送方/接收方)
 │   │   ├── secret.h/cpp          # 中继地址 (XOR 混淆) + 本机 IP 获取
+│   │   ├── qr_renderer.h/cpp     # Nayuki QR Code 生成封装
 │   │   └── gui_main.cpp          # Win32 GUI 主程序
 │   ├── CMakeLists.txt
 │   └── build.bat
@@ -100,6 +102,20 @@ FileTransfer/
 │   │   └── relay_main.cpp        # 控制台入口
 │   ├── CMakeLists.txt
 │   └── build.bat
+├── Mobile/              # 手机端 (Kotlin Multiplatform + Android)
+│   ├── shared/         # 跨平台公共模块 (KMP)
+│   │   └── src/
+│   │       ├── commonMain/   # 公共业务逻辑
+│   │       ├── androidMain/  # Android 平台实现
+│   │       └── iosMain/      # iOS 平台实现
+│   ├── androidApp/     # Android 应用模块
+│   └── native/         # 原生 C++ 核心库 (复用 Client 协议栈)
+│       └── src/
+│           ├── file_transfer.h/cpp
+│           ├── socket_util.h/cpp
+│           ├── relay.h / relay_client.cpp
+│           ├── secret.h / secret.cpp
+│           └── jni_bridge.cpp   # JNI 桥接层
 ├── assets/              # 图标资源
 ├── installer/           # Inno Setup 安装脚本
 └── .gitignore
@@ -213,6 +229,8 @@ Ctrl+C 优雅退出
 | 磁盘空间预检 | 接收前检查磁盘剩余空间，避免传输中途失败 |
 | 文件名长度限制 | 限制为 4096 字节，防止缓冲区溢出 |
 | 中继地址混淆 | XOR 加密 + 密钥 mask，防止 strings 扫描 |
+| 自定义中继地址加密 | Windows DPAPI 加密存储到注册表，仅当前用户+机器可解密 |
+| 高级设置防泄露 | 对话框不回显已保存地址，防止 UI 暴露公网 IP |
 | 中继连接限制 | 最大 2000 并发连接，防止线程耗尽 |
 | 中继房间限制 | 最大 1000 房间，防止内存耗尽 |
 | 中继传输限制 | 单次最大 10GB、30 分钟超时，防止带宽滥用 |
@@ -235,17 +253,32 @@ Ctrl+C 优雅退出
 
 ### v0.0.8 (2026-08-02)
 
-**二维码扫码传输 + 移动端支持**
+**二维码扫码传输 + 移动端支持 + UI 优化**
 
-- PC 端中继发送新增「生成二维码」按钮：选择文件后点击生成二维码，弹出二维码对话框供手机扫描
-- 集成 Nayuki QR Code 生成库（公开领域），生成含中继服务器地址 + 6 位房间码的二维码
-- 二维码内容格式：`FT1|R|relay_host|port|room_code`
-- 手机端新增「扫码接收」功能：接收标签页顶部显示扫码按钮，扫描 PC 端二维码后自动解析并开始中继接收
+- PC 端新增「二维码发送」独立传输模式（与局域网直连、房间码中继并列）：选择文件后点击生成二维码，**内嵌显示在主界面**供手机扫描
+- **二维码发送模式改为 HTTP 直连机制**（完全独立于中继服务器）：PC 绑定本地 TCP 端口，二维码包含本机 IP:port，手机扫码后直连接收，不再创建中继房间
+- 二维码内容格式：`FT1|H|local_ip|port`（HTTP 直连协议）
+- **二维码区域默认隐藏**：初始状态不显示空白框和提示文字，仅在点击「生成二维码」后才显示二维码和 IP:port 提示，传输完成/取消后自动隐藏
+- 修复二维码内嵌显示问题：`hQrImage` 控件样式在 `SS_CENTER` 与 `SS_BITMAP` 之间动态切换，确保位图正确渲染
+- 新增 C++ API：`ft::serve_file(port, filepath, cb)` 服务端绑定端口发送，`ft::connect_recv(ip, port, output_dir, cb)` 客户端连接接收
+- 集成 Nayuki QR Code 生成库（公开领域）
+- 手机端新增「扫码接收」功能：支持两种二维码格式解析
+  - `FT1|R|host|port|code`（中继模式）
+  - `FT1|H|ip|port`（HTTP 直连模式，手机作为客户端直连 PC）
 - 手机端集成 ZXing (zxing-android-embedded) 二维码扫描库
 - 手机端新增双模式文件传输（局域网直连 / 房间码中继），底部导航栏切换发送/接收
 - 手机端新增日志窗口、高级设置（自定义中继服务器）、自定义保存目录
 - 手机端取消/完成后自动重置状态（无需手动点击返回按钮）
 - 手机端开始按钮在传输中直接变为取消按钮
+- Mobile/native 核心库同步 `serve_file` / `connect_recv` 实现及新错误码（`ERR_ACCEPT`、`ERR_SEND_NAME`）
+- JNI 桥接层新增 `connectRecvNative` 方法供 Kotlin 端调用
+
+**安全加固**
+
+- 高级设置对话框不再回显已保存的自定义中继服务器地址，防止 UI 中暴露公网 IP
+- 自定义中继服务器地址使用 Windows DPAPI 加密后存储到注册表（`REG_BINARY`），防止注册表中明文暴露 IP
+- DPAPI 加密数据仅当前用户 + 当前机器可解密，复制到其他环境无效
+- 向后兼容：自动识别旧版明文注册表数据并加载，下次保存时自动迁移为加密格式
 
 ### v0.0.7 (2026-08-02)
 

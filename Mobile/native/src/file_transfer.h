@@ -46,6 +46,7 @@ enum ErrorCode : int {
     ERR_CONNECT     = 4,    // 连接失败
     ERR_BIND        = 5,    // 绑定端口失败
     ERR_LISTEN      = 6,    // 监听失败
+    ERR_ACCEPT      = 17,   // accept 失败
     ERR_RECV_HDR    = 7,    // 接收头部失败
     ERR_BAD_MAGIC   = 8,    // 协议魔数/版本不匹配
     ERR_BAD_NAME    = 9,    // 文件名长度异常
@@ -56,6 +57,7 @@ enum ErrorCode : int {
     ERR_WRITE_FILE  = 14,   // 写入文件失败
     ERR_SEND_DATA   = 15,   // 发送数据失败
     ERR_READ_FILE   = 16,   // 读取文件失败
+    ERR_SEND_NAME   = 18,   // 发送文件名失败
     ERR_RELAY_LINE  = 20,   // 中继协议: 读取/发送文本行失败
     ERR_RELAY_CODE  = 21,   // 中继协议: 房间码格式错误
     ERR_RELAY_ROOM  = 22,   // 中继协议: 房间不存在/已满
@@ -129,6 +131,16 @@ int send_file(const std::string& ip, unsigned short port,
 // 返回 0 表示成功, CANCELED 表示取消, 其他非 0 表示错误
 int recv_file(unsigned short port, const std::string& output_dir,
               ProgressCallback cb = nullptr);
+
+// 二维码 HTTP 直连模式: 服务端绑定端口, 等待客户端连接后发送文件
+// 返回 0 成功, CANCELED 取消, 其他错误码
+int serve_file(unsigned short port, const std::string& filepath,
+               ProgressCallback cb = nullptr);
+
+// 二维码 HTTP 直连模式: 客户端连接到远端 IP:port, 接收文件并保存
+// 返回 0 成功, CANCELED 取消, 其他错误码
+int connect_recv(const std::string& ip, unsigned short port,
+                 const std::string& output_dir, ProgressCallback cb = nullptr);
 
 // ===== 局域网自动发现 (UDP 广播) =====
 // 发现协议:

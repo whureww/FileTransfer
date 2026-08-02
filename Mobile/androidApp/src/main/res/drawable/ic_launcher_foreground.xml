@@ -1,0 +1,30 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 文档轮廓 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M38,28 L58,28 L70,40 L70,80 L38,80 Z" />
+    <path
+        android:fillColor="#E3ECF1"
+        android:pathData="M58,28 L58,40 L70,40 Z" />
+
+    <!-- 文档内容线 -->
+    <path
+        android:strokeColor="#2C6E8F"
+        android:strokeWidth="2.5"
+        android:pathData="M44,50 L64,50" />
+    <path
+        android:strokeColor="#2C6E8F"
+        android:strokeWidth="2.5"
+        android:pathData="M44,58 L64,58" />
+
+    <!-- 传输箭头: 向右 (发送) -->
+    <path
+        android:fillColor="#2C6E8F"
+        android:pathData="M30,62 L30,70 L42,70 L42,75 L52,66 L42,57 L42,62 Z" />
+
+</vector>

@@ -190,6 +190,28 @@ Java_com_filetransfer_protocol_NativeBridge_recvFileNative(
     return static_cast<jint>(result);
 }
 
+// ---------- 客户端接收 (HTTP 直连模式: 连接到远端 IP:port 接收文件) ----------
+
+JNIEXPORT jint JNICALL
+Java_com_filetransfer_protocol_NativeBridge_connectRecvNative(
+    JNIEnv* env, jobject thiz,
+    jstring ip, jint port, jstring save_dir, jobject callback)
+{
+    const char* ip_c = env->GetStringUTFChars(ip, nullptr);
+    const char* dir_c = env->GetStringUTFChars(save_dir, nullptr);
+
+    auto ctx = make_callback_ctx(env, callback);
+    ft::ProgressCallback cb = make_progress_cb(ctx.get());
+
+    int result = ft::connect_recv(
+        ip_c, static_cast<unsigned short>(port), dir_c, cb);
+
+    env->ReleaseStringUTFChars(ip, ip_c);
+    env->ReleaseStringUTFChars(save_dir, dir_c);
+    release_callback_ctx(env, ctx);
+    return static_cast<jint>(result);
+}
+
 // ---------- 中继: 发送 ----------
 
 JNIEXPORT jint JNICALL

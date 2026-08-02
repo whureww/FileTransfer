@@ -266,62 +266,127 @@ class TransferService {
         }
     }
 
-    // ===== 扫码接收 (解析二维码内容, 通过中继接收文件) =====
-    // QR 内容格式: FT1|R|relay_host|port|room_code
+    // ===== 扫码接收 (解析二维码内容) =====
+    // 支持两种格式:
+    //   FT1|H|local_ip|port  → HTTP 直连 (二维码发送模式, 无需中继)
+    //   FT1|R|relay_host|port|room_code → 房间码中继
     fun recvFileByScan(qrContent: String, saveDir: String): Boolean {
         if (transferJob?.isActive == true) return false
 
-        // 解析二维码内容
         val parts = qrContent.split("|")
-        if (parts.size < 5 || parts[0] != "FT1" || parts[1] != "R") {
+        if (parts.isEmpty() || parts[0] != "FT1") {
             appendLog("[错误] 无效的二维码内容: $qrContent")
             return false
         }
 
-        val relayHost = parts[2]
-        val relayPort = parts[3].toIntOrNull() ?: return false
-        val roomCode = parts[4].trim().uppercase()
+        when (parts.getOrNull(1)) {
+            "H" -> {
+                // HTTP 直连模式: FT1|H|local_ip|port
+                // PC 端作为服务端绑定端口等待手机连接, 手机端作为客户端接收文件
+                if (parts.size < 4) {
+                    appendLog("[错误] 二维码格式不正确 (缺少 IP 和端口)")
+                    return false
+                }
+                val ip = parts[2]
+                val port = parts[3].toIntOrNull() ?: run {
+                    appendLog("[错误] 端口号无效: ${parts[3]}")
+                    return false
+                }
 
-        if (roomCode.length != 6) {
-            appendLog("[错误] 房间码长度不正确: $roomCode")
-            return false
-        }
+                canceled = false
+                clearLogs()
+                appendLog("========== 扫码接收 (HTTP 直连) ==========")
+                appendLog("[信息] 正在连接 $ip:$port ...")
 
-        canceled = false
-        clearLogs()
-        appendLog("========== 扫码接收 (中继) ==========")
-        appendLog("[信息] 正在连接中继服务器...")
-        appendLog("[信息] 房间码: $roomCode")
+                transferJob = CoroutineScope(Dispatchers.Default).launch {
+                    _state.value = TransferState.Connecting
 
-        transferJob = CoroutineScope(Dispatchers.Default).launch {
-            _state.value = TransferState.Connecting
-
-            val callback = object : ProgressCallback {
-                override fun onProgress(done: Long, total: Long, message: String): Boolean {
-                    if (total > 0) {
-                        _state.value = TransferState.Transferring(done, total, message)
-                    } else if (message.isNotEmpty()) {
-                        appendLog(message)
+                    val callback = object : ProgressCallback {
+                        override fun onProgress(done: Long, total: Long, message: String): Boolean {
+                            if (total > 0) {
+                                _state.value = TransferState.Transferring(done, total, message)
+                            } else if (message.isNotEmpty()) {
+                                appendLog(message)
+                            }
+                            return !canceled
+                        }
                     }
-                    return !canceled
+
+                    // 手机作为客户端, 连接 PC 端接收文件
+                    val result = NativeBridge.connectRecv(ip, port, saveDir, callback)
+
+                    _state.value = when {
+                        canceled -> { appendLog("[取消] 传输已取消"); TransferState.Canceled }
+                        result == 0 -> { appendLog("[完成] 文件接收成功, 保存到: $saveDir"); TransferState.Done }
+                        else -> {
+                            appendLog("[失败] 错误码: $result (${NativeBridge.errorString(result)})")
+                            TransferState.Error(result, NativeBridge.errorString(result))
+                        }
+                    }
+                    autoReset()
                 }
+                return true
             }
 
-            val result = NativeBridge.relayRecvFile(
-                relayHost, relayPort, roomCode, saveDir, callback
-            )
-
-            _state.value = when {
-                canceled -> { appendLog("[取消] 传输已取消"); TransferState.Canceled }
-                result == 0 -> { appendLog("[完成] 文件接收成功, 保存到: $saveDir"); TransferState.Done }
-                else -> {
-                    appendLog("[失败] 错误码: $result (${NativeBridge.errorString(result)})")
-                    TransferState.Error(result, NativeBridge.errorString(result))
+            "R" -> {
+                // 中继模式: FT1|R|relay_host|port|room_code
+                if (parts.size < 5) {
+                    appendLog("[错误] 二维码格式不正确 (缺少中继参数)")
+                    return false
                 }
+                val relayHost = parts[2]
+                val relayPort = parts[3].toIntOrNull() ?: run {
+                    appendLog("[错误] 中继端口无效: ${parts[3]}")
+                    return false
+                }
+                val roomCode = parts[4].trim().uppercase()
+                if (roomCode.length != 6) {
+                    appendLog("[错误] 房间码长度不正确: $roomCode")
+                    return false
+                }
+
+                canceled = false
+                clearLogs()
+                appendLog("========== 扫码接收 (中继) ==========")
+                appendLog("[信息] 正在连接中继服务器...")
+                appendLog("[信息] 房间码: $roomCode")
+
+                transferJob = CoroutineScope(Dispatchers.Default).launch {
+                    _state.value = TransferState.Connecting
+
+                    val callback = object : ProgressCallback {
+                        override fun onProgress(done: Long, total: Long, message: String): Boolean {
+                            if (total > 0) {
+                                _state.value = TransferState.Transferring(done, total, message)
+                            } else if (message.isNotEmpty()) {
+                                appendLog(message)
+                            }
+                            return !canceled
+                        }
+                    }
+
+                    val result = NativeBridge.relayRecvFile(
+                        relayHost, relayPort, roomCode, saveDir, callback
+                    )
+
+                    _state.value = when {
+                        canceled -> { appendLog("[取消] 传输已取消"); TransferState.Canceled }
+                        result == 0 -> { appendLog("[完成] 文件接收成功, 保存到: $saveDir"); TransferState.Done }
+                        else -> {
+                            appendLog("[失败] 错误码: $result (${NativeBridge.errorString(result)})")
+                            TransferState.Error(result, NativeBridge.errorString(result))
+                        }
+                    }
+                    autoReset()
+                }
+                return true
             }
-            autoReset()
+
+            else -> {
+                appendLog("[错误] 未知的二维码类型: ${parts[1]}")
+                return false
+            }
         }
-        return true
     }
 
     // 取消当前传输

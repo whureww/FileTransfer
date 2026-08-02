@@ -20,6 +20,9 @@ actual object NativeBridge {
     private external fun recvFileNative(
         port: Int, saveDir: String, callback: ProgressCallback
     ): Int
+    private external fun connectRecvNative(
+        ip: String, port: Int, saveDir: String, callback: ProgressCallback
+    ): Int
     private external fun relaySendFileNative(
         host: String, port: Int, filePath: String, callback: ProgressCallback
     ): Int
@@ -38,6 +41,9 @@ actual object NativeBridge {
 
     actual fun recvFile(port: Int, saveDir: String, callback: ProgressCallback): Int =
         recvFileNative(port, saveDir, callback)
+
+    actual fun connectRecv(ip: String, port: Int, saveDir: String, callback: ProgressCallback): Int =
+        connectRecvNative(ip, port, saveDir, callback)
 
     actual fun relaySendFile(host: String, port: Int, filePath: String, callback: ProgressCallback): Int =
         relaySendFileNative(host, port, filePath, callback)

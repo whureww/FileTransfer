@@ -36,6 +36,16 @@ expect object NativeBridge {
         callback: ProgressCallback
     ): Int
 
+    // 客户端接收: 连接到远端 IP:port, 接收文件并保存
+    // 用于二维码 HTTP 直连模式
+    // 返回 0=成功, 200=取消, 其他=错误码
+    fun connectRecv(
+        ip: String,
+        port: Int,
+        saveDir: String,
+        callback: ProgressCallback
+    ): Int
+
     // ===== 房间码中继 (跨局域网) =====
 
     // 中继发送文件 (创建房间, 返回房间码)

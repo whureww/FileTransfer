@@ -10,7 +10,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.mutableStateOf
 import com.filetransfer.service.TransferService
+import com.filetransfer.ui.SplashScreen
 import com.filetransfer.ui.TransferScreen
+import com.filetransfer.ui.theme.FileTransferTheme
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import java.io.File
@@ -22,6 +24,9 @@ class MainActivity : ComponentActivity() {
 
     // 文件路径状态 (供 Compose UI 观察和更新)
     private val filePathState = mutableStateOf("")
+
+    // 启动屏状态
+    private val showSplashState = mutableStateOf(true)
 
     // 默认保存目录 (app 专用 received 文件夹)
     private lateinit var defaultSaveDir: File
@@ -77,23 +82,29 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            TransferScreen(
-                service = transferService,
-                filePath = filePathState.value,
-                onFilePathChange = { filePathState.value = it },
-                onPickFile = { pickFileLauncher.launch("*/*") },
-                saveDirProvider = { transferService.saveDir },
-                onPickSaveDir = { pickDirLauncher.launch(null) },
-                onScan = {
-                    val options = ScanOptions().apply {
-                        setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                        setPrompt("将手机摄像头对准 PC 端生成的二维码")
-                        setBeepEnabled(true)
-                        setOrientationLocked(false)
-                    }
-                    scanLauncher.launch(options)
+            FileTransferTheme {
+                if (showSplashState.value) {
+                    SplashScreen(onFinished = { showSplashState.value = false })
+                } else {
+                    TransferScreen(
+                        service = transferService,
+                        filePath = filePathState.value,
+                        onFilePathChange = { filePathState.value = it },
+                        onPickFile = { pickFileLauncher.launch("*/*") },
+                        saveDirProvider = { transferService.saveDir },
+                        onPickSaveDir = { pickDirLauncher.launch(null) },
+                        onScan = {
+                            val options = ScanOptions().apply {
+                                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                                setPrompt("将手机摄像头对准 PC 端生成的二维码")
+                                setBeepEnabled(true)
+                                setOrientationLocked(false)
+                            }
+                            scanLauncher.launch(options)
+                        }
+                    )
                 }
-            )
+            }
         }
     }
 

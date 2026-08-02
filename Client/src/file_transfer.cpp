@@ -439,7 +439,295 @@ int recv_file(unsigned short port, const std::string& output_dir,
     return 0;
 }
 
-// ===== 局域网自动发现 (UDP 广播) =====
+// 服务模式: 绑定端口, 等待客户端连接, 将文件发送给客户端
+int serve_file(unsigned short port, const std::string& filepath, ProgressCallback cb) {
+#ifdef _WIN32
+    std::ifstream in(detail::utf8_to_wpath(filepath), std::ios::binary);
+#else
+    std::ifstream in(filepath, std::ios::binary);
+#endif
+    if (!in.is_open()) {
+        report(cb, 0, 0, "[错误] 无法打开文件: " + filepath);
+        return ERR_OPEN_FILE;
+    }
+
+    uint64_t file_size = 0;
+    if (!get_file_size(in, file_size)) {
+        report(cb, 0, 0, "[错误] 无法获取文件大小: " + filepath);
+        return ERR_FILE_SIZE;
+    }
+
+    std::string fname = basename(filepath);
+
+    socket_t listen_sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (listen_sock == INVALID_SOCK) {
+        report(cb, 0, 0, "[错误] 创建 socket 失败, errno=" + std::to_string(sock_errno()));
+        return ERR_SOCKET;
+    }
+
+    int yes = 1;
+    ::setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR,
+                 reinterpret_cast<const char*>(&yes), sizeof(yes));
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = ::htons(port);
+    addr.sin_addr.s_addr = ::htonl(INADDR_ANY);
+
+    if (::bind(listen_sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == -1) {
+        report(cb, 0, 0, "[错误] bind 失败, errno=" + std::to_string(sock_errno()));
+        close_socket(listen_sock);
+        return ERR_BIND;
+    }
+    if (::listen(listen_sock, 1) == -1) {
+        report(cb, 0, 0, "[错误] listen 失败, errno=" + std::to_string(sock_errno()));
+        close_socket(listen_sock);
+        return ERR_LISTEN;
+    }
+
+    if (!report(cb, 0, 0, "[信息] 等待手机连接, 端口 " + std::to_string(port))) {
+        close_socket(listen_sock);
+        return CANCELED;
+    }
+
+    // 等待客户端连接 (使用 select 轮询以便取消)
+    sockaddr_in client_addr{};
+    int client_len = sizeof(client_addr);
+    socket_t conn = INVALID_SOCK;
+    while (conn == INVALID_SOCK) {
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(listen_sock, &rfds);
+        timeval tv{0, 200 * 1000};
+#ifdef _WIN32
+        int sel = ::select(0, &rfds, nullptr, nullptr, &tv);
+#else
+        int sel = ::select(listen_sock + 1, &rfds, nullptr, nullptr, &tv);
+#endif
+        if (sel == 0) {
+            if (!report(cb, 0, 0, "")) {
+                close_socket(listen_sock);
+                return CANCELED;
+            }
+            continue;
+        }
+        if (sel < 0) {
+            report(cb, 0, 0, "[错误] select 失败");
+            close_socket(listen_sock);
+            return ERR_SOCKET;
+        }
+        conn = ::accept(listen_sock,
+                        reinterpret_cast<sockaddr*>(&client_addr),
+                        &client_len);
+        if (conn == INVALID_SOCK) {
+            report(cb, 0, 0, "[错误] accept 失败");
+            close_socket(listen_sock);
+            return ERR_SOCKET;
+        }
+    }
+
+    char ip_buf[INET_ADDRSTRLEN] = {0};
+    ::inet_ntop(AF_INET, &client_addr.sin_addr, ip_buf, sizeof(ip_buf));
+    report(cb, 0, 0, std::string("[信息] 手机已连接: ") + ip_buf + ":"
+             + std::to_string(::ntohs(client_addr.sin_port)));
+
+    // 发送协议头
+    PacketHeader hdr{};
+    std::memcpy(hdr.magic, MAGIC, 4);
+    hdr.version = PROTOCOL_VERSION;
+    hdr.flags = 0;
+    hdr.filename_len = static_cast<uint16_t>(fname.size());
+    hdr.file_size = file_size;
+
+    if (!send_all(conn, reinterpret_cast<const char*>(&hdr), sizeof(hdr))) {
+        report(cb, 0, 0, "[错误] 发送头部失败");
+        close_socket(conn);
+        close_socket(listen_sock);
+        return ERR_SEND_HDR;
+    }
+    if (!send_all(conn, fname.data(), fname.size())) {
+        report(cb, 0, 0, "[错误] 发送文件名失败");
+        close_socket(conn);
+        close_socket(listen_sock);
+        return ERR_SEND_HDR;
+    }
+
+    // 发送文件数据
+    report(cb, 0, 0, "[信息] 开始发送: " + fname + " (" + std::to_string(file_size) + " bytes)");
+
+    std::vector<char> buf(BUFFER_SIZE);
+    uint64_t sent = 0;
+    while (sent < file_size) {
+        if (!report(cb, sent, file_size, "")) {
+            close_socket(conn);
+            close_socket(listen_sock);
+            return CANCELED;
+        }
+
+        in.read(buf.data(), buf.size());
+        std::streamsize n = in.gcount();
+        if (n <= 0) break;
+
+        uint32_t frame_len = static_cast<uint32_t>(n);
+        if (!write_frame(conn, FRAME_DATA, buf.data(), frame_len)) {
+            report(cb, 0, 0, "[错误] 发送数据失败, 连接可能已断开");
+            close_socket(conn);
+            close_socket(listen_sock);
+            return ERR_SEND_DATA;
+        }
+        sent += static_cast<uint64_t>(n);
+
+        if (sent % (BUFFER_SIZE * 2) == 0) {
+            report(cb, sent, file_size, "");
+        }
+    }
+
+    // 发送完成帧
+    write_frame(conn, FRAME_DONE, nullptr, 0);
+    report(cb, file_size, file_size, "[成功] 文件发送完成");
+
+    close_socket(conn);
+    close_socket(listen_sock);
+    return 0;
+}
+
+// 客户端接收: 连接到远端 IP:port, 接收文件并保存
+int connect_recv(const std::string& ip, unsigned short port,
+                 const std::string& output_dir, ProgressCallback cb) {
+    std::string out_dir = normalize_dir(output_dir, cb);
+
+    socket_t sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCK) {
+        report(cb, 0, 0, "[错误] 创建 socket 失败");
+        return ERR_SOCKET;
+    }
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = ::htons(port);
+    if (::inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) <= 0) {
+        report(cb, 0, 0, "[错误] 无效的 IP 地址: " + ip);
+        close_socket(sock);
+        return ERR_CONNECT;
+    }
+
+    if (!report(cb, 0, 0, "[信息] 正在连接 " + ip + ":" + std::to_string(port) + " ...")) {
+        close_socket(sock);
+        return CANCELED;
+    }
+
+    if (::connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == -1) {
+        report(cb, 0, 0, "[错误] 连接失败, errno=" + std::to_string(sock_errno()));
+        close_socket(sock);
+        return ERR_CONNECT;
+    }
+
+    // 读取协议头
+    PacketHeader hdr{};
+    if (!recv_all(sock, reinterpret_cast<char*>(&hdr), sizeof(hdr))) {
+        report(cb, 0, 0, "[错误] 接收头部失败");
+        close_socket(sock);
+        return ERR_RECV_HDR;
+    }
+
+    if (std::memcmp(hdr.magic, MAGIC, 4) != 0 || hdr.version != PROTOCOL_VERSION) {
+        report(cb, 0, 0, "[错误] 协议版本不匹配");
+        close_socket(sock);
+        return ERR_BAD_MAGIC;
+    }
+
+    // 读取文件名
+    std::string fname(hdr.filename_len, '\0');
+    if (!recv_all(sock, &fname[0], hdr.filename_len)) {
+        report(cb, 0, 0, "[错误] 接收文件名失败");
+        close_socket(sock);
+        return ERR_RECV_NAME;
+    }
+
+    std::string safe_name = sanitize_filename(fname);
+    std::string out_path = unique_filepath(out_dir, safe_name);
+    report(cb, 0, 0, "[信息] 接收文件: " + safe_name + " (" +
+             std::to_string(hdr.file_size) + " bytes) -> " + out_path);
+
+#ifdef _WIN32
+    std::ofstream out(detail::utf8_to_wpath(out_path), std::ios::binary);
+#else
+    std::ofstream out(out_path, std::ios::binary);
+#endif
+    if (!out.is_open()) {
+        report(cb, 0, 0, "[错误] 无法创建输出文件: " + out_path);
+        close_socket(sock);
+        return ERR_CREATE_FILE;
+    }
+
+    // 读取文件数据
+    std::vector<char> buf(BUFFER_SIZE);
+    uint64_t received = 0;
+    bool done = false;
+    while (!done) {
+        if (!report(cb, received, hdr.file_size, "")) {
+            out.close();
+            std::remove(out_path.c_str());
+            close_socket(sock);
+            return CANCELED;
+        }
+
+        uint8_t frame_type;
+        uint32_t frame_len;
+        std::vector<char> frame_data;
+        if (!read_frame(sock, frame_type, frame_data, frame_len)) {
+            report(cb, 0, 0, "[错误] 接收数据失败, 连接可能已断开");
+            out.close();
+            std::remove(out_path.c_str());
+            close_socket(sock);
+            return ERR_RECV_DATA;
+        }
+
+        if (frame_type == FRAME_CANCEL) {
+            report(cb, 0, 0, "[信息] 发送方已取消传输");
+            out.close();
+            std::remove(out_path.c_str());
+            close_socket(sock);
+            return CANCELED;
+        }
+        if (frame_type == FRAME_DONE) {
+            if (received != hdr.file_size) {
+                report(cb, 0, 0, "[错误] 文件不完整: 声明 " + std::to_string(hdr.file_size) +
+                       " 字节, 实际接收 " + std::to_string(received) + " 字节");
+                out.close();
+                std::remove(out_path.c_str());
+                close_socket(sock);
+                return ERR_RECV_DATA;
+            }
+            done = true;
+            break;
+        }
+        if (frame_type == FRAME_DATA) {
+            if (received + frame_len > hdr.file_size) {
+                report(cb, 0, 0, "[错误] 接收数据超出声明的文件大小");
+                out.close();
+                std::remove(out_path.c_str());
+                close_socket(sock);
+                return ERR_RECV_DATA;
+            }
+            out.write(frame_data.data(), frame_len);
+            received += frame_len;
+            report(cb, received, hdr.file_size, "");
+        } else {
+            report(cb, 0, 0, "[错误] 未知帧类型: " + std::to_string(frame_type));
+            out.close();
+            std::remove(out_path.c_str());
+            close_socket(sock);
+            return ERR_RECV_DATA;
+        }
+    }
+    out.flush();
+    out.close();
+    report(cb, hdr.file_size, hdr.file_size, "[成功] 文件接收完成: " + out_path);
+
+    close_socket(sock);
+    return 0;
+}
 
 std::vector<std::pair<std::string, unsigned short>>
 discover_peers(unsigned short tcp_port, int timeout_ms) {
