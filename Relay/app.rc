@@ -14,13 +14,13 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName",      "FileTransfer"
-            VALUE "FileDescription",  "FileTransfer Relay Server"
+            VALUE "CompanyName",      "Silex"
+            VALUE "FileDescription",  "Silex Relay Server"
             VALUE "FileVersion",      "0.0.8.0"
-            VALUE "InternalName",     "FileTransferRelay"
+            VALUE "InternalName",     "SilexRelay"
             VALUE "LegalCopyright",   "Copyright (C) 2026"
-            VALUE "OriginalFilename", "FileTransferRelay.exe"
-            VALUE "ProductName",      "FileTransfer Relay Server"
+            VALUE "OriginalFilename", "SilexRelay.exe"
+            VALUE "ProductName",      "Silex Relay Server"
             VALUE "ProductVersion",   "0.0.8.0"
         END
     END

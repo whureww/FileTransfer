@@ -1,9 +1,9 @@
 package com.filetransfer.protocol
 
-// Android 实现: 通过 JNI 调用 C++ 核心库 (libfiletransfer_native.so)
+// Android 实现: 通过 JNI 调用 C++ 核心库 (libsilex_native.so)
 actual object NativeBridge {
     init {
-        System.loadLibrary("filetransfer_native")
+        System.loadLibrary("silex_native")
     }
 
     // JNI 声明 (对应 jni_bridge.cpp 中的导出函数)

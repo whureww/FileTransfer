@@ -1,5 +1,5 @@
-// FileTransferRelay 中继服务器控制台入口
-// 用法: FileTransferRelay.exe [port]    默认端口 9091
+// SilexRelay 中继服务器控制台入口
+// 用法: SilexRelay.exe [port]    默认端口 9091
 // 部署到公网 VPS 上, 两端通过房间码进行跨局域网文件传输
 #include "relay.h"
 
@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
     enable_utf8_console();
 
     // 单实例检测: 防止同一台电脑运行多个中继服务器
-    HANDLE hMutex = CreateMutexW(nullptr, TRUE, L"FileTransfer_Relay_SingleInstance_Mutex");
+    HANDLE hMutex = CreateMutexW(nullptr, TRUE, L"Silex_Relay_SingleInstance_Mutex");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         std::cerr << "[错误] 中继服务器已在运行, 请勿重复启动\n";
         CloseHandle(hMutex);
@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    std::cout << "FileTransferRelay v0.0.8\n";
+    std::cout << "SilexRelay v0.0.9\n";
     std::cout << "用法: 两端均连接本服务, 发送方创建房间得到 6 位房间码,\n";
     std::cout << "      将房间码告知接收方即可进行文件传输 (跨局域网)\n";
     std::cout << "默认端口: " << ft::DEFAULT_RELAY_PORT

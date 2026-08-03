@@ -1,4 +1,4 @@
-# FileTransfer
+# 臻传 Silex
 
 跨平台文件传输工具，支持局域网直连和房间码中继两种模式，二维码扫码自动配对中继房间。
 
@@ -81,7 +81,7 @@
 ## 项目结构
 
 ```
-FileTransfer/
+Silex/
 ├── Client/              # GUI 客户端
 │   ├── src/
 │   │   ├── file_transfer.h/cpp   # 文件传输核心 (send_file / recv_file / relay_send_file / relay_recv_file)
@@ -175,10 +175,10 @@ cd Relay
 ```
 
 构建产物：
-- `Client/build/FileTransfer.exe` — GUI 客户端
-- `Client/build/installer/FileTransfer_Client_Setup.exe` — 客户端安装器
-- `Relay/build/FileTransferRelay.exe` — 中继服务器
-- `Relay/build/installer/FileTransfer_Relay_Setup.exe` — 中继服务器安装器
+- `Client/build/Silex.exe` — GUI 客户端
+- `Client/build/installer/Silex_Client_Setup.exe` — 客户端安装器
+- `Relay/build/SilexRelay.exe` — 中继服务器
+- `Relay/build/installer/Silex_Relay_Setup.exe` — 中继服务器安装器
 
 ### Linux/macOS 构建 (GCC/Clang)
 
@@ -202,14 +202,14 @@ make -j$(nproc)
 
 ### 中继转发
 
-1. 在公网服务器上运行 `FileTransferRelay.exe [port]`（默认端口 9091）
+1. 在公网服务器上运行 `SilexRelay.exe [port]`（默认端口 9091）
 2. 发送方选择「中继发送」，选择文件，获得 6 位房间码
 3. 接收方选择「中继接收」，输入房间码，等待文件传输
 
 ### 中继服务器参数
 
 ```
-FileTransferRelay.exe [port]
+SilexRelay.exe [port]
 
 默认端口: 9091
 最大房间数: 1000
@@ -259,7 +259,7 @@ Ctrl+C 优雅退出
 - **扫码功能集成到中继发送**：点击「创建房间并发送」后，房间码和二维码**同时生成**，接收方可手动输入房间码或扫码自动加入
 - **PC 端窗口标题更新**：去掉「二维码」字样，仅显示「局域网 / 房间码中继」
 - **手机端扫码按钮仅在中继模式显示**：局域网模式下不再显示「扫码接收」按钮，避免误导
-- **手机端默认接收目录优化**：首次启动时在公共存储创建 `FileTransfer/received/` 文件夹，用户可通过文件管理器直接访问接收的文件
+- **手机端默认接收目录优化**：首次启动时在公共存储创建 `Silex/received/` 文件夹，用户可通过文件管理器直接访问接收的文件
 - **修复二维码传输连接超时**：`connect_recv` 改为非阻塞 connect + select 轮询（每 200ms 检查一次取消标志），取消响应从 ~120 秒降至 ~200ms
 - **修复二维码传输取消延迟**：30 秒整体超时替代 OS 默认 ~120 秒超时，连接失败时更快返回错误
 - **手机端 CameraX 版本升级**：从 1.3.1 升级到 1.3.4 稳定版，修复 `Unresolved reference: camera` 等编译错误

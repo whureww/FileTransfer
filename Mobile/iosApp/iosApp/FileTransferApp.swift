@@ -2,7 +2,7 @@ import SwiftUI
 import Shared
 
 @main
-struct FileTransferApp: App {
+struct SilexApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

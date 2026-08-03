@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(FileTransfer VERSION 0.0.9 LANGUAGES CXX)
+project(Silex VERSION 0.0.9 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -42,13 +42,13 @@ set(GUI_SOURCES
 )
 
 # WIN32 关键字: 生成 GUI 子系统程序 (无控制台黑窗口)
-add_executable(FileTransfer WIN32 ${GUI_SOURCES})
+add_executable(Silex WIN32 ${GUI_SOURCES})
 
 if(WIN32)
-    target_link_libraries(FileTransfer PRIVATE
+    target_link_libraries(Silex PRIVATE
         ws2_32 comctl32 comdlg32 shell32 ole32 user32 gdi32 iphlpapi)
 else()
-    target_link_libraries(FileTransfer PRIVATE pthread)
+    target_link_libraries(Silex PRIVATE pthread)
 endif()
 
 # 构建后自动复制必需的 MSVC 运行时 DLL (仅 exe 实际依赖的 3 个)
@@ -56,17 +56,17 @@ if(MSVC AND DEFINED ENV{VCToolsRedistDir})
     file(GLOB _crt_dirs "$ENV{VCToolsRedistDir}/x64/Microsoft.VC*.CRT")
     if(_crt_dirs)
         list(GET _crt_dirs 0 _crt_dll_dir)
-        add_custom_command(TARGET FileTransfer POST_BUILD
+        add_custom_command(TARGET Silex POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy
             "${_crt_dll_dir}/VCRUNTIME140.dll"
             "${_crt_dll_dir}/VCRUNTIME140_1.dll"
             "${_crt_dll_dir}/MSVCP140.dll"
-            "$<TARGET_FILE_DIR:FileTransfer>"
+            "$<TARGET_FILE_DIR:Silex>"
             COMMENT "Copying MSVC runtime DLLs...")
     endif()
 endif()
 
-install(TARGETS FileTransfer RUNTIME DESTINATION bin)
+install(TARGETS Silex RUNTIME DESTINATION bin)
 
 # ===== 构建后用 Inno Setup (ISCC) 编译安装器 =====
 # 商业软件标准安装向导: 选择安装路径 / 桌面快捷方式 / 注册表 / 卸载
@@ -88,7 +88,7 @@ if(WIN32)
 
         # 占位符: configure_file 时替换 OutputDir / OutputBaseFilename / SetupIconFile
         set(INSTALLER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/installer")
-        set(INSTALLER_OUTPUT_BASENAME "FileTransfer_Client_Setup")
+        set(INSTALLER_OUTPUT_BASENAME "Silex_Client_Setup")
         file(TO_NATIVE_PATH "${INSTALLER_OUTPUT_DIR}" INSTALLER_OUTPUT_DIR)
         file(TO_NATIVE_PATH "${CMAKE_BINARY_DIR}" ISCC_SOURCEDIR)
         # 安装器自身窗口图标 = 客户端图标
@@ -101,12 +101,12 @@ if(WIN32)
             @ONLY
         )
 
-        add_custom_command(TARGET FileTransfer POST_BUILD
+        add_custom_command(TARGET Silex POST_BUILD
             COMMAND ${ISCC_EXECUTABLE}
                 "/DSOURCEDIR=${ISCC_SOURCEDIR}"
                 Client.iss
             WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/installer"
-            COMMENT "Building installer (Inno Setup): FileTransfer_Client_Setup.exe"
+            COMMENT "Building installer (Inno Setup): Silex_Client_Setup.exe"
         )
     else()
         message(STATUS "ISCC.exe (Inno Setup) not found - installer build SKIPPED")

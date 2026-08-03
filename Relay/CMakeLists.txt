@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(FileTransferRelay VERSION 0.0.9 LANGUAGES CXX)
+project(SilexRelay VERSION 0.0.9 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,7 +22,7 @@ endif()
 include_directories(${CMAKE_SOURCE_DIR}/src)
 
 # ===== 中继服务器 (控制台程序, 部署到公网 VPS) =====
-add_executable(FileTransferRelay
+add_executable(SilexRelay
     src/socket_util.cpp
     src/file_transfer.cpp
     src/relay_server.cpp
@@ -31,9 +31,9 @@ add_executable(FileTransferRelay
 )
 
 if(WIN32)
-    target_link_libraries(FileTransferRelay PRIVATE ws2_32)
+    target_link_libraries(SilexRelay PRIVATE ws2_32)
 else()
-    target_link_libraries(FileTransferRelay PRIVATE pthread)
+    target_link_libraries(SilexRelay PRIVATE pthread)
 endif()
 
 # 构建后自动复制必需的 MSVC 运行时 DLL (仅 exe 实际依赖的 3 个)
@@ -41,17 +41,17 @@ if(MSVC AND DEFINED ENV{VCToolsRedistDir})
     file(GLOB _crt_dirs "$ENV{VCToolsRedistDir}/x64/Microsoft.VC*.CRT")
     if(_crt_dirs)
         list(GET _crt_dirs 0 _crt_dll_dir)
-        add_custom_command(TARGET FileTransferRelay POST_BUILD
+        add_custom_command(TARGET SilexRelay POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy
             "${_crt_dll_dir}/VCRUNTIME140.dll"
             "${_crt_dll_dir}/VCRUNTIME140_1.dll"
             "${_crt_dll_dir}/MSVCP140.dll"
-            "$<TARGET_FILE_DIR:FileTransferRelay>"
+            "$<TARGET_FILE_DIR:SilexRelay>"
             COMMENT "Copying MSVC runtime DLLs...")
     endif()
 endif()
 
-install(TARGETS FileTransferRelay RUNTIME DESTINATION bin)
+install(TARGETS SilexRelay RUNTIME DESTINATION bin)
 
 # ===== 构建后用 Inno Setup (ISCC) 编译安装器 =====
 # 商业软件标准安装向导: 选择安装路径 / 桌面快捷方式 / 注册表 / 卸载
@@ -73,7 +73,7 @@ if(WIN32)
 
         # 占位符: configure_file 时替换 OutputDir / OutputBaseFilename / SetupIconFile
         set(INSTALLER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/installer")
-        set(INSTALLER_OUTPUT_BASENAME "FileTransfer_Relay_Setup")
+        set(INSTALLER_OUTPUT_BASENAME "Silex_Relay_Setup")
         file(TO_NATIVE_PATH "${INSTALLER_OUTPUT_DIR}" INSTALLER_OUTPUT_DIR)
         file(TO_NATIVE_PATH "${CMAKE_BINARY_DIR}" ISCC_SOURCEDIR)
         # 安装器自身窗口图标 = 中继端图标
@@ -86,12 +86,12 @@ if(WIN32)
             @ONLY
         )
 
-        add_custom_command(TARGET FileTransferRelay POST_BUILD
+        add_custom_command(TARGET SilexRelay POST_BUILD
             COMMAND ${ISCC_EXECUTABLE}
                 "/DSOURCEDIR=${ISCC_SOURCEDIR}"
                 Relay.iss
             WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/installer"
-            COMMENT "Building installer (Inno Setup): FileTransfer_Relay_Setup.exe"
+            COMMENT "Building installer (Inno Setup): Silex_Relay_Setup.exe"
         )
     else()
         message(STATUS "ISCC.exe (Inno Setup) not found - installer build SKIPPED")

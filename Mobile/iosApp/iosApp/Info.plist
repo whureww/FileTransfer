@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>FileTransfer</string>
+    <string>Silex</string>
     <key>CFBundleDisplayName</key>
-    <string>FileTransfer</string>
+    <string>臻传</string>
     <key>CFBundleIdentifier</key>
-    <string>com.filetransfer.app</string>
+    <string>com.silex.app</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>CFBundleShortVersionString</key>

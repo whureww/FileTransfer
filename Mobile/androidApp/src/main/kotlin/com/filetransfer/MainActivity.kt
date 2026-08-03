@@ -18,7 +18,7 @@ import com.filetransfer.service.TransferService
 import com.filetransfer.ui.QrScannerScreen
 import com.filetransfer.ui.SplashScreen
 import com.filetransfer.ui.TransferScreen
-import com.filetransfer.ui.theme.FileTransferTheme
+import com.filetransfer.ui.theme.SilexTheme
 import java.io.File
 import java.io.FileOutputStream
 
@@ -77,9 +77,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // 初始化默认保存目录:
-        // 优先使用公共目录 /storage/emulated/0/FileTransfer/received/ (用户可通过文件管理器直接访问)
+        // 优先使用公共目录 /storage/emulated/0/Silex/received/ (用户可通过文件管理器直接访问)
         // 无权限时回退到 app 专用目录 /Android/data/com.filetransfer/files/received/
-        val publicDir = File(Environment.getExternalStorageDirectory(), "FileTransfer/received")
+        val publicDir = File(Environment.getExternalStorageDirectory(), "Silex/received")
         defaultSaveDir = if (publicDir.exists() || publicDir.mkdirs()) {
             publicDir
         } else {
@@ -103,7 +103,7 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            FileTransferTheme {
+            SilexTheme {
                 when {
                     showSplashState.value -> {
                         SplashScreen(onFinished = { showSplashState.value = false })

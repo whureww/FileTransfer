@@ -98,7 +98,7 @@ fun SplashScreen(onFinished: () -> Unit) {
 
             // 应用名称
             Text(
-                text = "FileTransfer",
+                text = "臻传 Silex",
                 fontSize = 24.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onBackground,

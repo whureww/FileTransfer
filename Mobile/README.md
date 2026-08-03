@@ -1,4 +1,4 @@
-# FileTransfer Mobile (KMP + C++ 核心库)
+# Silex Mobile (KMP + C++ 核心库)
 
 跨平台手机端文件传输 App，基于 **Kotlin Multiplatform (KMP)** + **C++ 核心库复用**，与桌面端协议完全一致。
 
@@ -65,7 +65,7 @@ Mobile/
 │
 └── iosApp/                      # iOS 应用
     └── iosApp/
-        ├── FileTransferApp.swift       # @main 入口
+        ├── SilexApp.swift       # @main 入口
         ├── ContentView.swift           # SwiftUI UI
         ├── TransferViewModel.swift     # ViewModel
         └── Info.plist
@@ -144,7 +144,7 @@ cmake --build build-ios
 
 ## 中继服务器
 
-手机端使用与桌面端相同的中继服务器 (`Relay/FileTransferRelay.exe`)，无需修改。
+手机端使用与桌面端相同的中继服务器 (`Relay/SilexRelay.exe`)，无需修改。
 
 默认中继地址在 `TransferService` 中配置:
 ```kotlin

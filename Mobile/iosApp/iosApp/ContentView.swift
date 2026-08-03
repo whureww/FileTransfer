@@ -12,7 +12,7 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 20) {
-                Text("FileTransfer v0.0.8")
+                Text("臻传 Silex v0.0.9")
                     .font(.title2)
                     .fontWeight(.bold)
 
@@ -46,7 +46,7 @@ struct ContentView: View {
                 Spacer()
             }
             .padding()
-            .navigationTitle("FileTransfer")
+            .navigationTitle("臻传 Silex")
         }
     }
 }

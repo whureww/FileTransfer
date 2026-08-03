@@ -13,7 +13,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "FileTransferMobile"
+rootProject.name = "SilexMobile"
 
 include(":shared")
 include(":androidApp")

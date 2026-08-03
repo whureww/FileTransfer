@@ -1,4 +1,4 @@
-// FileTransfer GUI 主程序 - Win32 原生窗口界面
+// Silex GUI 主程序 - Win32 原生窗口界面
 // 支持两种模式: 局域网直连 / 房间码中继 (跨局域网, 含二维码扫码)
 #include "file_transfer.h"
 #include "relay.h"
@@ -471,18 +471,18 @@ static unsigned short ParsePort(const std::wstring& s, bool& ok) {
     return (unsigned short)v;
 }
 
-// 确保 Windows 防火墙入站规则 "FileTransfer" 存在 (允许本程序接收入站 TCP 连接)
+// 确保 Windows 防火墙入站规则 "Silex" 存在 (允许本程序接收入站 TCP 连接)
 // wait=true 时等待 netsh 完成并复核规则是否生效; wait=false 时触发 UAC 后立即返回 (启动时非阻塞)
 // 返回 true 表示规则确认已存在
 static bool EnsureFirewallRule(bool wait) {
     const std::wstring check_cmd =
-        L"netsh advfirewall firewall show rule name=\"FileTransfer\" >nul 2>&1";
+        L"netsh advfirewall firewall show rule name=\"Silex\" >nul 2>&1";
     if (_wsystem(check_cmd.c_str()) == 0) return true;  // 规则已存在
 
     // 规则缺失, 以管理员权限添加 (触发 UAC 提示)
     wchar_t exe_path[MAX_PATH] = {0};
     GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
-    std::wstring params = L"advfirewall firewall add rule name=\"FileTransfer\" "
+    std::wstring params = L"advfirewall firewall add rule name=\"Silex\" "
         L"dir=in action=allow program=\"" + std::wstring(exe_path) + L"\" enable=yes";
     SHELLEXECUTEINFOW sei = {};
     sei.cbSize = sizeof(sei);
@@ -575,7 +575,7 @@ static void TransferThread_RelayRecv(std::string host, unsigned short port,
 }
 
 // ========== 关闭行为偏好 (注册表读写) ==========
-static const wchar_t* REG_KEY = L"Software\\FileTransfer";
+static const wchar_t* REG_KEY = L"Software\\Silex";
 
 static int LoadCloseAction() {
     HKEY hKey;
@@ -612,7 +612,7 @@ static std::vector<BYTE> DpapiEncrypt(const std::string& plaintext) {
     input.pbData = (BYTE*)plaintext.data();
     input.cbData = (DWORD)plaintext.size();
     DATA_BLOB output = {};
-    if (!CryptProtectData(&input, L"FileTransfer_Relay", nullptr, nullptr,
+    if (!CryptProtectData(&input, L"Silex_Relay", nullptr, nullptr,
                           nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output)) {
         return {};
     }
@@ -715,7 +715,7 @@ static void TrayCreate() {
     g_ctx.nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_ctx.nid.uCallbackMessage = WM_TRAYICON;
     g_ctx.nid.hIcon = LoadIconW(g_ctx.hInst, MAKEINTRESOURCEW(1));
-    wcscpy_s(g_ctx.nid.szTip, L"FileTransfer - 文件传输");
+    wcscpy_s(g_ctx.nid.szTip, L"臻传 Silex - 文件传输");
     Shell_NotifyIconW(NIM_ADD, &g_ctx.nid);
     g_ctx.tray_created = true;
 }
@@ -1196,7 +1196,7 @@ static int ShowCloseChoiceDialog(HWND hWnd) {
         wc.hInstance = g_ctx.hInst;
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
         wc.hbrBackground = nullptr;
-        wc.lpszClassName = L"FileTransferCloseDlg";
+        wc.lpszClassName = L"SilexCloseDlg";
         RegisterClassExW(&wc);
         registered = true;
     }
@@ -1212,7 +1212,7 @@ static int ShowCloseChoiceDialog(HWND hWnd) {
     // 创建模态对话框 - 使用父子关系保持 z-order, 移除 DLGMODALFRAME 消除白边
     HWND hDlg = CreateWindowExW(
         0,
-        L"FileTransferCloseDlg",
+        L"SilexCloseDlg",
         L"",
         WS_POPUP | WS_VISIBLE,
         x, y, dlgW, dlgH,
@@ -1409,7 +1409,7 @@ static bool ShowAdvRelayDialog(HWND hParent) {
         wc.hInstance = g_ctx.hInst;
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
         wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-        wc.lpszClassName = L"FileTransferAdvRelayDlg";
+        wc.lpszClassName = L"SilexAdvRelayDlg";
         RegisterClassExW(&wc);
         registered = true;
     }
@@ -1424,7 +1424,7 @@ static bool ShowAdvRelayDialog(HWND hParent) {
 
     // 创建窗口
     HWND hDlg = CreateWindowExW(0,
-        L"FileTransferAdvRelayDlg",
+        L"SilexAdvRelayDlg",
         L"高级设置 - 自定义中继服务器",
         WS_POPUP | WS_CAPTION | WS_SYSMENU,
         x, y, dlgW, dlgH,
@@ -1546,7 +1546,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         // 标题
         g_ctx.hTitle = CreateCtrl(hWnd, L"static",
-                   L"FileTransfer v0.0.9 - 文件传输 (局域网 / 房间码中继)",
+                   L"臻传 Silex v0.0.9 - 文件传输 (局域网 / 房间码中继)",
                    SS_CENTER, 0, 0, 10, 10, 0);
 
         // ===== 模式选择区 =====
@@ -1652,7 +1652,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         ApplyModeVisibility();
 
         AppendLog(L"就绪。请选择传输模式 (局域网直连 / 房间码中继)。\r\n");
-        AppendLog(L"提示: 房间码中继模式需先在公网 VPS 上运行 FileTransferRelay.exe\r\n");
+        AppendLog(L"提示: 房间码中继模式需先在公网 VPS 上运行 SilexRelay.exe\r\n");
         AppendLog(L"提示: 中继发送时会在旁边显示二维码, 手机扫码可自动加入房间\r\n");
         return 0;
     }
@@ -2026,10 +2026,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 // ========== 入口 ==========
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     // 单实例检测: 防止同一台电脑运行多个客户端
-    HANDLE hMutex = CreateMutexW(nullptr, TRUE, L"FileTransfer_Client_SingleInstance_Mutex");
+    HANDLE hMutex = CreateMutexW(nullptr, TRUE, L"Silex_Client_SingleInstance_Mutex");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         CloseHandle(hMutex);
-        HWND existing = FindWindowW(L"FileTransferMainWindow", nullptr);
+        HWND existing = FindWindowW(L"SilexMainWindow", nullptr);
         if (existing) {
             ShowWindow(existing, SW_RESTORE);
             SetForegroundWindow(existing);
@@ -2052,7 +2052,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
         return 1;
     }
 
-    const wchar_t* cls_name = L"FileTransferMainWindow";
+    const wchar_t* cls_name = L"SilexMainWindow";
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = WndProc;
@@ -2070,7 +2070,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     AdjustWindowRectEx(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0);
 
     g_ctx.hwnd = CreateWindowExW(
-        0, cls_name, L"FileTransfer v0.0.9 - 文件传输 (局域网/中继)",
+        0, cls_name, L"臻传 Silex v0.0.9 - 文件传输 (局域网/中继)",
         WS_OVERLAPPEDWINDOW,  // 完整窗口样式: 可调整大小、可最大化
         CW_USEDEFAULT, CW_USEDEFAULT,
         rc.right - rc.left, rc.bottom - rc.top,

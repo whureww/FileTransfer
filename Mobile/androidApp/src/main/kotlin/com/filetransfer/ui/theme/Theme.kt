@@ -47,14 +47,14 @@ private val DarkColorScheme = darkColorScheme(
 )
 
 @Composable
-fun FileTransferTheme(
+fun SilexTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
     val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = FileTransferTypography,
+        typography = SilexTypography,
         content = content
     )
 }

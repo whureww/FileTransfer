@@ -15,7 +15,7 @@ android {
         versionCode = 1
         versionName = "0.0.8"
         
-        // NDK 配置: 编译 C++ 核心库 (libfiletransfer_native.so)
+        // NDK 配置: 编译 C++ 核心库 (libsilex_native.so)
         externalNativeBuild {
             cmake {
                 cppFlags("-std=c++17")

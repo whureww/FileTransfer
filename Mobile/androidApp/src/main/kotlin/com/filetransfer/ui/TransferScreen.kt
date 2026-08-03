@@ -77,7 +77,7 @@ fun TransferScreen(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "FileTransfer",
+                            "臻传 Silex",
                             fontWeight = FontWeight.SemiBold
                         )
                         Spacer(Modifier.width(8.dp))

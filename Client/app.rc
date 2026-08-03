@@ -15,13 +15,13 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName",      "FileTransfer"
-            VALUE "FileDescription",  "FileTransfer Client - File transfer via LAN / room code"
+            VALUE "CompanyName",      "Silex"
+            VALUE "FileDescription",  "Silex Client - File transfer via LAN / room code"
             VALUE "FileVersion",      "0.0.8.0"
-            VALUE "InternalName",     "FileTransfer"
+            VALUE "InternalName",     "Silex"
             VALUE "LegalCopyright",   "Copyright (C) 2026"
-            VALUE "OriginalFilename", "FileTransfer.exe"
-            VALUE "ProductName",      "FileTransfer Client"
+            VALUE "OriginalFilename", "Silex.exe"
+            VALUE "ProductName",      "Silex Client"
             VALUE "ProductVersion",   "0.0.8.0"
         END
     END
