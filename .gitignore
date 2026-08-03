@@ -49,5 +49,8 @@ relay_log.txt
 secret_real.cpp
 secret_local.cpp
 
+# 前端网页 (独立维护, 不上传)
+docs/
+
 # 编译器 ID 文件
 ShowIncludes/

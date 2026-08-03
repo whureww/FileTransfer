@@ -17,33 +17,10 @@
 
 namespace ft {
 
-// 中继服务器地址 (XOR 加密, 运行时解密)
+// 开源版本: 不含真实中继服务器地址
+// 如需使用自建中继服务器, 请参考 secret_local.cpp.example 模板
 std::string get_relay_addr() {
-    static volatile unsigned char key_masked[16] = {
-        0x22, 0x63, 0x11, 0x68, 0x37, 0x0A, 0x6D, 0x2C,
-        0x0B, 0x6E, 0x28, 0x0E, 0x6C, 0x2D, 0x00, 0x6B
-    };
-    static volatile unsigned char enc[20] = {
-        0x49, 0x0F, 0x79, 0x1C, 0x5F, 0x61, 0x06, 0x58,
-        0x60, 0x0C, 0x41, 0x7A, 0x07, 0x45, 0x63, 0x0B,
-        0x41, 0x09, 0x72, 0x03
-    };
-    constexpr unsigned char MASK = 0x5A;
-    constexpr int len = 20;
-    constexpr int key_len = 16;
-    unsigned char key[16];
-    for (int i = 0; i < key_len; ++i) {
-        key[i] = key_masked[i] ^ MASK;
-    }
-    char buf[64] = {0};
-    for (int i = 0; i < len; ++i) {
-        buf[i] = static_cast<char>(enc[i] ^ key[i % key_len]);
-    }
-    buf[len] = 0;
-    std::string result(buf);
-    std::memset(buf, 0, sizeof(buf));
-    std::memset(key, 0, sizeof(key));
-    return result;
+    return "0.0.0.0:9091";  // 占位地址, 请替换为你的服务器
 }
 
 bool parse_relay_addr(std::string& host, unsigned short& port) {
