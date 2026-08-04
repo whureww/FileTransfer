@@ -7,19 +7,20 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-// 浅色主题 (主要使用)
+// 浅色主题 (主要使用, 方案 E 蓝暖杏)
 private val LightColorScheme = lightColorScheme(
     primary = BrandPrimary,
     onPrimary = BrandOnPrimary,
     primaryContainer = BrandPrimaryContainer,
     onPrimaryContainer = BrandOnPrimaryContainer,
     secondary = BrandSecondary,
+    onSecondary = BrandOnPrimary,
     secondaryContainer = BrandSecondaryContainer,
-    onSecondary = Color.White,
+    onSecondaryContainer = BrandOnSecondaryContainer,
     background = BrandBackground,
-    onBackground = Color(0xFF1A1C1E),
+    onBackground = BrandOnSurface,
     surface = BrandSurface,
-    onSurface = Color(0xFF1A1C1E),
+    onSurface = BrandOnSurface,
     surfaceVariant = BrandSurfaceVariant,
     onSurfaceVariant = BrandOnSurfaceVariant,
     error = BrandError,
@@ -27,23 +28,25 @@ private val LightColorScheme = lightColorScheme(
     outline = BrandOutline,
 )
 
-// 深色主题
+// 深色主题 (靛蓝系, 保持品牌一致)
 private val DarkColorScheme = darkColorScheme(
-    primary = Color(0xFF7DCFE8),
-    onPrimary = Color(0xFF003544),
-    primaryContainer = Color(0xFF1F526B),
-    onPrimaryContainer = Color(0xFFBEE9F5),
-    secondary = Color(0xFFA4CDD9),
-    onSecondary = Color(0xFF063540),
-    background = Color(0xFF0F1112),
-    onBackground = Color(0xFFE2E3E5),
-    surface = Color(0xFF1A1C1E),
-    onSurface = Color(0xFFE2E3E5),
-    surfaceVariant = Color(0xFF2D3135),
-    onSurfaceVariant = Color(0xFFBFC8CE),
+    primary = Color(0xFF9DA5F2),
+    onPrimary = Color(0xFF262F7A),
+    primaryContainer = Color(0xFF3A4391),
+    onPrimaryContainer = Color(0xFFDEE1FF),
+    secondary = Color(0xFFF2B890),
+    onSecondary = Color(0xFF5C3A1F),
+    secondaryContainer = Color(0xFF7A5230),
+    onSecondaryContainer = Color(0xFFFFDCC4),
+    background = Color(0xFF14171F),
+    onBackground = Color(0xFFE4E7EE),
+    surface = Color(0xFF1B1F29),
+    onSurface = Color(0xFFE4E7EE),
+    surfaceVariant = Color(0xFF2C323E),
+    onSurfaceVariant = Color(0xFFC2C8D4),
     error = Color(0xFFFFB4AB),
     onError = Color(0xFF690005),
-    outline = Color(0xFF5A656C),
+    outline = Color(0xFF5A616E),
 )
 
 @Composable

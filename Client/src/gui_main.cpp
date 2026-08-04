@@ -11,6 +11,7 @@
 #include <commdlg.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <dwmapi.h>
 #include <dpapi.h>
 #include <chrono>
 #include <string>
@@ -27,6 +28,8 @@
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "msimg32.lib")
+#pragma comment(lib, "dwmapi.lib")
 
 // 启用 XP+ 视觉样式
 #pragma comment(linker, \
@@ -37,15 +40,24 @@
     "publicKeyToken='6595b64144ccf1df' "\
     "language='*'\"")
 
-// ========== 布局常量 ==========
-static const int MARGIN = 12;          // 外边距
-static const int LABEL_W = 120;        // 标签列宽度 (容纳中文标签)
-static const int EDIT_H = 28;          // 输入框高度
-static const int BTN_H = 34;           // 按钮高度
-static const int BROWSE_W = 90;        // 浏览按钮宽度
+// ========== 布局常量 (96 DPI 基准, 运行时按 DPI 缩放) ==========
+static const int MARGIN = 20;          // 外边距
+static const int LABEL_W = 72;         // 标签列宽度 (卡片内表单标签)
+static const int EDIT_H = 44;          // 输入框高度
+static const int BTN_H = 48;           // 按钮高度
+static const int BROWSE_W = 96;        // 浏览按钮宽度
+static const int CARD_RADIUS = 12;     // 卡片圆角半径
+static const int CARD_PADDING = 24;    // 卡片内边距
+static const int TAB_H = 52;           // 模式标签栏高度
+static const int TITLE_BAR_H = 56;     // 标题栏高度
+static const int MAX_CONTENT_W = 1100; // 内容区最大宽度 (超出则居中)
 // 最小窗口客户区尺寸
-static const int MIN_W = 700;
-static const int MIN_H = 820;
+static const int MIN_W = 860;
+static const int MIN_H = 800;
+
+// DPI 缩放辅助
+static float g_dpiScale = 1.0f;
+static int Dpi(int v) { return (int)(v * g_dpiScale + 0.5f); }
 
 // ========== 传输模式 ==========
 enum class TransferMode {
@@ -159,7 +171,7 @@ struct AppContext {
     HWND hRRecvDirLbl = nullptr, hRRecvDirEdit = nullptr;
     HWND hRRecvDirBrowse = nullptr, hRRecvBtn = nullptr;
 
-    HWND hProgress = nullptr, hLog = nullptr, hCancelBtn = nullptr, hLogLbl = nullptr;
+    HWND hLog = nullptr, hCancelBtn = nullptr, hLogLbl = nullptr;
 
     // 系统托盘 + 关闭行为偏好
     HINSTANCE hInst = nullptr;
@@ -175,6 +187,45 @@ struct AppContext {
     HBITMAP qr_bitmap = nullptr;   // 二维码位图
     int qr_bitmap_size = 0;        // 二维码位图边长 (像素)
     unsigned short qr_listen_port = 0;  // 预留 (未使用)
+
+    // ===== 卡片式 UI 绘制相关 =====
+    // 卡片区域矩形 (用于 WM_PAINT 绘制)
+    RECT rcCard1 = {};     // 发送卡片
+    RECT rcCard2 = {};     // 接收卡片
+    RECT rcProgress = {};  // 进度条卡片
+    RECT rcLog = {};       // 日志卡片
+    RECT rcTabBar = {};    // 模式标签栏
+
+    // 自定义窗口按钮 (交通灯)
+    RECT rcBtnMin = {};    // 最小化按钮
+    RECT rcBtnMax = {};    // 最大化/还原按钮
+    RECT rcBtnCls = {};    // 关闭按钮
+    bool hoverMin=false, hoverMax=false, hoverCls=false;
+    RECT rcRestore = {};   // 最大化前的窗口位置
+    bool maximized = false; // 自定义最大化标志 (IsZoomed 对 WS_POPUP 不可靠)
+
+    // 按钮悬停状态
+    bool hoverSend=false, hoverRecv=false, hoverRSend=false, hoverRRecv=false;
+    bool hoverCancel=false, hoverBrowse1=false, hoverBrowse2=false;
+    bool hoverBrowse3=false, hoverBrowse4=false;
+    bool hoverAdv=false, hoverTabLan=false, hoverTabRelay=false;
+    // 按钮按下状态
+    bool pressSend=false, pressRecv=false, pressRSend=false, pressRRecv=false;
+    bool pressCancel=false, pressBrowse1=false, pressBrowse2=false;
+    bool pressBrowse3=false, pressBrowse4=false, pressAdv=false;
+
+    // 额外字体
+    HFONT hFontTitle = nullptr;   // 标题字体 (16px, bold)
+    HFONT hFontCard = nullptr;    // 卡片标题字体 (14px, bold)
+    HFONT hFontSmall = nullptr;   // 描述文字字体 (11px)
+    HFONT hFontBtn = nullptr;     // 按钮字体 (13px)
+    HFONT hFontTab = nullptr;     // 模式标签字体 (更大)
+
+    // 自绘进度条状态
+    uint64_t prog_done = 0;
+    uint64_t prog_total = 0;
+    int prog_pct = 0;
+    bool prog_active = false;
 };
 
 static AppContext g_ctx;
@@ -241,6 +292,124 @@ static HWND CreateCtrl(HWND parent, const wchar_t* cls, const wchar_t* text,
     return hwndCtrl;
 }
 
+// ========== 输入框: 文字水平 + 垂直完全居中 ==========
+// Win32 单行 edit 无法让文字垂直居中 (EM_SETRECT 只对多行控件生效),
+// 因此输入框统一创建为 ES_MULTILINE + ES_AUTOHSCROLL (行为等同单行, 不换行),
+// 再用 EM_SETRECT 把格式化矩形收窄为一行高度并垂直居中。
+// 多行 edit 不支持 EM_SETCUEBANNER, 空状态提示文字由子类化自行居中绘制。
+
+// 前向声明 (EditCenteredProc 中需要在 WM_SIZE 时重新计算垂直居中)
+static void CenterEditTextVertically(HWND hEdit);
+
+static LRESULT CALLBACK EditCenteredProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
+                                         UINT_PTR /*uIdSubclass*/, DWORD_PTR dwRefData) {
+    switch (msg) {
+    case WM_PAINT: {
+        // 每次重绘前确保格式矩形仍为垂直居中 (caret 位置跟随, 兜底防重置)
+        CenterEditTextVertically(hwnd);
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        int rad = Dpi(16); // 圆角直径
+        // 先铺满卡片白色, 圆角之外的角落与卡片背景融合, 避免露出方形角
+        HBRUSH white = CreateSolidBrush(RGB(255,255,255));
+        FillRect(hdc, &rc, white);
+        DeleteObject(white);
+        // 圆角内填充浅灰背景
+        HRGN rgn = CreateRoundRectRgn(0, 0, rc.right + 1, rc.bottom + 1, rad, rad);
+        HBRUSH bg = CreateSolidBrush(RGB(248,250,252));
+        FillRgn(hdc, rgn, bg);
+        // 圆角边框 (聚焦时高亮)
+        bool focused = (GetFocus() == hwnd);
+        HPEN pen = CreatePen(PS_SOLID, 1, focused ? RGB(120,130,255) : RGB(224,230,240));
+        HGDIOBJ oldPen = SelectObject(hdc, pen);
+        HGDIOBJ oldBr = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        RoundRect(hdc, 1, 1, rc.right - 2, rc.bottom - 2, rad, rad);
+        SelectObject(hdc, oldPen);
+        SelectObject(hdc, oldBr);
+        DeleteObject(pen);
+        DeleteObject(rgn);
+        DeleteObject(bg);
+        // 文字: 空 + 无焦点显示灰色提示; 有内容显示深色文字, 均完全居中
+        const wchar_t* cue = reinterpret_cast<const wchar_t*>(dwRefData);
+        bool empty = GetWindowTextLengthW(hwnd) == 0;
+        HFONT f = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+        HFONT oldF = f ? (HFONT)SelectObject(hdc, f) : nullptr;
+        SetBkMode(hdc, TRANSPARENT);
+        if (empty && !focused && cue && cue[0]) {
+            SetTextColor(hdc, RGB(148,163,184));
+            DrawTextW(hdc, cue, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        } else if (!empty) {
+            std::wstring txt = GetTextW(hwnd);
+            SetTextColor(hdc, IsWindowEnabled(hwnd) ? RGB(51,65,85) : RGB(170,180,195));
+            SIZE sz = {};
+            GetTextExtentPoint32W(hdc, txt.c_str(), (int)txt.size(), &sz);
+            if (sz.cx <= (rc.right - rc.left)) {
+                DrawTextW(hdc, txt.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            } else {
+                // 超宽文本从左侧开始显示 (尾部裁剪)
+                RECT lrc = rc;
+                InflateRect(&lrc, -Dpi(4), 0);
+                DrawTextW(hdc, txt.c_str(), -1, &lrc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            }
+        }
+        if (oldF) SelectObject(hdc, oldF);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_ERASEBKGND:
+        // 背景由 WM_PAINT 自绘, 防止闪烁
+        return 1;
+    case WM_SETFOCUS:
+    case WM_KILLFOCUS:
+        // 焦点变化时刷新提示文字与边框高亮
+        InvalidateRect(hwnd, nullptr, TRUE);
+        break;
+    }
+    LRESULT r = DefSubclassProc(hwnd, msg, wParam, lParam);
+    // 控件尺寸变化 (MoveWindow/DoLayout) 或文本被设置 (SetWindowTextW)
+    // 都会重置多行编辑框的格式矩形, 需重新计算垂直居中
+    if (msg == WM_SIZE || msg == WM_SETTEXT) CenterEditTextVertically(hwnd);
+    return r;
+}
+
+// 让输入框文字垂直居中: 将格式化矩形收窄为一行高度并垂直居中
+static void CenterEditTextVertically(HWND hEdit) {
+    if (!hEdit) return;
+    RECT rc;
+    GetClientRect(hEdit, &rc);
+    if (rc.bottom <= 0) return;
+    HDC hdc = GetDC(hEdit);
+    HFONT f = (HFONT)SendMessageW(hEdit, WM_GETFONT, 0, 0);
+    HFONT oldF = f ? (HFONT)SelectObject(hdc, f) : nullptr;
+    TEXTMETRICW tm = {};
+    GetTextMetricsW(hdc, &tm);
+    if (oldF) SelectObject(hdc, oldF);
+    ReleaseDC(hEdit, hdc);
+    int lineH = tm.tmHeight + tm.tmExternalLeading;
+    if (lineH <= 0) lineH = rc.bottom;
+    int dy = (rc.bottom - lineH) / 2;
+    if (dy <= 0) return;
+    RECT textRc = {rc.left, dy, rc.right, rc.bottom - dy};
+    // 已居中则跳过, 避免每次重绘重复 EM_SETRECT (会触发重绘, 可能死循环)
+    RECT cur = {};
+    SendMessageW(hEdit, EM_GETRECT, 0, (LPARAM)&cur);
+    if (cur.left == textRc.left && cur.top == textRc.top &&
+        cur.right == textRc.right && cur.bottom == textRc.bottom) return;
+    SendMessageW(hEdit, EM_SETRECT, 0, (LPARAM)&textRc);
+}
+
+// 创建文字完全居中的输入框 (placeholder 为空则不显示提示文字)
+static HWND CreateEditCentered(HWND parent, const wchar_t* placeholder,
+                               const wchar_t* text, DWORD extraStyle, int id) {
+    HWND hEdit = CreateCtrl(parent, L"edit", text,
+                   ES_MULTILINE | ES_AUTOHSCROLL | ES_CENTER | extraStyle,
+                   0, 0, 10, 10, id);
+    if (hEdit) SetWindowSubclass(hEdit, EditCenteredProc, 1, (DWORD_PTR)placeholder);
+    return hEdit;
+}
+
 // 显示/隐藏一组控件 (用于模式切换)
 static void ShowGroup(const std::initializer_list<HWND>& ctrls, BOOL show) {
     for (HWND h : ctrls) {
@@ -248,125 +417,142 @@ static void ShowGroup(const std::initializer_list<HWND>& ctrls, BOOL show) {
     }
 }
 
-// ========== 布局: 根据客户区大小重排所有控件 ==========
+// ========== 布局: 根据客户区大小重排所有控件 (卡片式, DPI 缩放, 居中) ==========
 static void DoLayout(int cx, int cy) {
-    int x = MARGIN;
-    int w = cx - MARGIN * 2;       // 内容区宽度
+    // DPI 缩放后的局部尺寸
+    int margin   = Dpi(MARGIN);
+    int labelW   = Dpi(LABEL_W);
+    int editH    = Dpi(EDIT_H);
+    int btnH     = Dpi(BTN_H);
+    int browseW  = Dpi(BROWSE_W);
+    int cardPad  = Dpi(CARD_PADDING);
+    int tabH     = Dpi(TAB_H);
+    int titleH   = Dpi(TITLE_BAR_H);
 
-    // 标题
-    MoveWindow(g_ctx.hTitle, x, 10, w, 26, TRUE);
+    // 内容区宽度 (限制最大宽度并居中, 避免全屏时内容拉散)
+    int w = cx - margin * 2;
+    int maxW = Dpi(MAX_CONTENT_W);
+    if (w > maxW) w = maxW;
+    if (w < 100) w = 100;
+    int x = (cx - w) / 2;  // 居中
 
-    // ===== 模式选择区 =====
-    int y = 40;
-    int modeH = 50;
-    MoveWindow(g_ctx.hModeGroup, x, y, w, modeH, TRUE);
-    int ym = y + 22;
-    // 两个 radio 并排
-    MoveWindow(g_ctx.hModeLan, x + 14, ym, 130, 22, TRUE);
-    MoveWindow(g_ctx.hModeRelay, x + 14 + 130 + 20, ym, 200, 22, TRUE);
+    bool lan = (g_ctx.mode == TransferMode::LAN);
 
-    // ===== 局域网直连 - 发送区域 =====
-    int yS = y + modeH + 8;
-    int sendGroupH = 160;
-    MoveWindow(g_ctx.hSendGroup, x, yS, w, sendGroupH, TRUE);
-    int y2 = yS + 34;
-    // 端口 (左上角, 与下方文件路径对齐)
-    int portEditW = 70;
-    MoveWindow(g_ctx.hSendPortLbl, x + 12, y2 + 4, LABEL_W - 12, 20, TRUE);
-    MoveWindow(g_ctx.hSendPortEdit, x + LABEL_W, y2, portEditW, EDIT_H, TRUE);
+    // ===== 模式标签栏 =====
+    int tabGap = Dpi(8);
+    int tabY = titleH + tabGap;
+    g_ctx.rcTabBar = {x, tabY, x + w, tabY + tabH};
+    int tabHalfW = w / 2;
+    MoveWindow(g_ctx.hModeLan, x + 3, tabY + 3, tabHalfW - 3, tabH - 6, TRUE);
+    MoveWindow(g_ctx.hModeRelay, x + tabHalfW, tabY + 3, w - tabHalfW - 3, tabH - 6, TRUE);
 
-    int y3 = y2 + EDIT_H + 14;
-    int fileEditW = w - LABEL_W - BROWSE_W - 18;
-    MoveWindow(g_ctx.hFileLbl, x + 12, y3 + 4, LABEL_W - 12, 20, TRUE);
-    MoveWindow(g_ctx.hFileEdit, x + LABEL_W, y3, fileEditW, EDIT_H, TRUE);
-    MoveWindow(g_ctx.hFileBrowse, x + LABEL_W + fileEditW + 8, y3 - 1, BROWSE_W, EDIT_H + 2, TRUE);
+    // ===== 卡片1 (发送区) - 高度由内容计算 =====
+    int headerH = Dpi(30);
+    int gap1 = Dpi(10);
+    int gap2 = Dpi(8);
+    int gap3 = Dpi(10);
+    int c1y = tabY + tabH + tabGap;
+    int contentX = x + cardPad + labelW;
+    int innerW = w - cardPad * 2 - labelW;
 
-    int y4 = y3 + EDIT_H + 16;
-    MoveWindow(g_ctx.hSendBtn, x + LABEL_W, y4, 140, BTN_H, TRUE);
+    int qrSize = Dpi(90);
+    int c1H = lan
+        ? (cardPad + headerH + gap1 + editH + gap2 + editH + gap3 + btnH + cardPad)
+        : (cardPad + headerH + gap1 + editH + gap2 + editH + gap3 + btnH + gap2 + qrSize + cardPad);
+    g_ctx.rcCard1 = {x, c1y, x + w, c1y + c1H};
 
-    // ===== 接收区域 y 坐标 (中继模式下发送区更高, 为二维码留空间) =====
-    int rSendGroupH = 240;  // 中继发送区高度 (容纳旁边二维码)
-    int sendH = (g_ctx.mode == TransferMode::RELAY) ? rSendGroupH : sendGroupH;
-    int yR = yS + sendH + 8;
+    int r1y = c1y + cardPad + headerH + gap1;
+    int r2y = r1y + editH + gap2;
+    int r3y = r2y + editH + gap3;
 
-    // ===== 局域网直连 - 接收区域 =====
-    int recvGroupH = 160;
-    MoveWindow(g_ctx.hRecvGroup, x, yR, w, recvGroupH, TRUE);
-    int yR2 = yR + 34;
-    MoveWindow(g_ctx.hRecvPortLbl, x + 12, yR2 + 4, LABEL_W - 12, 20, TRUE);
-    MoveWindow(g_ctx.hRecvPortEdit, x + LABEL_W, yR2, portEditW, EDIT_H, TRUE);
+    if (lan) {
+        MoveWindow(g_ctx.hSendPortLbl, x + cardPad, r1y + (editH - Dpi(28)) / 2, labelW, Dpi(28), TRUE);
+        MoveWindow(g_ctx.hSendPortEdit, contentX, r1y, Dpi(72), editH, TRUE);
+        MoveWindow(g_ctx.hFileLbl, x + cardPad, r2y + (editH - Dpi(28)) / 2, labelW, Dpi(28), TRUE);
+        int fileEditW = innerW - browseW - 6;
+        MoveWindow(g_ctx.hFileEdit, contentX, r2y, fileEditW, editH, TRUE);
+        MoveWindow(g_ctx.hFileBrowse, contentX + fileEditW + 6, r2y, browseW, editH, TRUE);
+        MoveWindow(g_ctx.hSendBtn, contentX, r3y, Dpi(130), btnH, TRUE);
+    } else {
+        MoveWindow(g_ctx.hRSendFileLbl, x + cardPad, r1y + (editH - Dpi(28)) / 2, labelW, Dpi(28), TRUE);
+        int rFileEditW = innerW - browseW - 6;
+        MoveWindow(g_ctx.hRSendFileEdit, contentX, r1y, rFileEditW, editH, TRUE);
+        MoveWindow(g_ctx.hRSendFileBrowse, contentX + rFileEditW + 6, r1y, browseW, editH, TRUE);
+        // 房间码行
+        MoveWindow(g_ctx.hRSendCodeLbl, x + cardPad, r2y + (editH - Dpi(28)) / 2, labelW, Dpi(28), TRUE);
+        MoveWindow(g_ctx.hRSendCodeEdit, contentX, r2y, Dpi(160), editH, TRUE);
+        // 按钮行 (创建房间 + 高级设置)
+        MoveWindow(g_ctx.hRSendBtn, contentX, r3y, Dpi(160), btnH, TRUE);
+        MoveWindow(g_ctx.hRSendAdvBtn, contentX + Dpi(170), r3y, Dpi(90), btnH, TRUE);
+        // QR 码区域 (按钮行下方)
+        int qrY = r3y + btnH + gap2;
+        MoveWindow(g_ctx.hQrImage, contentX, qrY, qrSize, qrSize, TRUE);
+        int qrLabelX = contentX + qrSize + Dpi(12);
+        int qrLabelW = w - cardPad - (qrLabelX - x);
+        MoveWindow(g_ctx.hQrCodeLbl2, qrLabelX, qrY + Dpi(10), qrLabelW, Dpi(48), TRUE);
+    }
 
-    int yR3 = yR2 + EDIT_H + 14;
-    int dirEditW = w - LABEL_W - BROWSE_W - 18;
-    MoveWindow(g_ctx.hDirLbl, x + 12, yR3 + 4, LABEL_W - 12, 20, TRUE);
-    MoveWindow(g_ctx.hDirEdit, x + LABEL_W, yR3, dirEditW, EDIT_H, TRUE);
-    MoveWindow(g_ctx.hDirBrowse, x + LABEL_W + dirEditW + 8, yR3 - 1, BROWSE_W, EDIT_H + 2, TRUE);
+    // ===== 卡片2 (接收区) - 高度由内容计算 =====
+    int c2Gap = Dpi(8);
+    int c2y = c1y + c1H + c2Gap;
+    int c2H = cardPad + headerH + gap1 + editH + gap2 + editH + gap2 + btnH + cardPad;
+    g_ctx.rcCard2 = {x, c2y, x + w, c2y + c2H};
 
-    int yR4 = yR3 + EDIT_H + 16;
-    MoveWindow(g_ctx.hRecvBtn, x + LABEL_W, yR4, 150, BTN_H, TRUE);
+    int r1y2 = c2y + cardPad + headerH + gap1;
+    int r2y2 = r1y2 + editH + gap2;
+    int r3y2 = r2y2 + editH + gap2;
 
-    // ===== 中继 - 发送方区域 (缩窄, 右侧留出二维码显示空间) =====
-    int yRS = yS;  // 与 LAN 发送区同位置 (互斥显示)
-    int qrImgW = 200;
-    int qrImgH = 200;
-    int qrGap = 16;
-    int rSendGroupW = w - qrImgW - qrGap;
-    MoveWindow(g_ctx.hRSendGroup, x, yRS, rSendGroupW, rSendGroupH, TRUE);
-    int yRS2 = yRS + 34;
-    int rFileEditW = rSendGroupW - LABEL_W - BROWSE_W - 18;
-    MoveWindow(g_ctx.hRSendFileLbl, x + 12, yRS2 + 4, LABEL_W - 12, 20, TRUE);
-    MoveWindow(g_ctx.hRSendFileEdit, x + LABEL_W, yRS2, rFileEditW, EDIT_H, TRUE);
-    MoveWindow(g_ctx.hRSendFileBrowse, x + LABEL_W + rFileEditW + 8, yRS2 - 1, BROWSE_W, EDIT_H + 2, TRUE);
+    if (lan) {
+        MoveWindow(g_ctx.hRecvPortLbl, x + cardPad, r1y2 + (editH - Dpi(28)) / 2, labelW, Dpi(28), TRUE);
+        MoveWindow(g_ctx.hRecvPortEdit, contentX, r1y2, Dpi(72), editH, TRUE);
+        MoveWindow(g_ctx.hDirLbl, x + cardPad, r2y2 + (editH - Dpi(28)) / 2, labelW, Dpi(28), TRUE);
+        int dirEditW = innerW - browseW - 6;
+        MoveWindow(g_ctx.hDirEdit, contentX, r2y2, dirEditW, editH, TRUE);
+        MoveWindow(g_ctx.hDirBrowse, contentX + dirEditW + 6, r2y2, browseW, editH, TRUE);
+        MoveWindow(g_ctx.hRecvBtn, contentX, r3y2, Dpi(140), btnH, TRUE);
+    } else {
+        MoveWindow(g_ctx.hRRecvCodeLbl, x + cardPad, r1y2 + (editH - Dpi(28)) / 2, labelW, Dpi(28), TRUE);
+        MoveWindow(g_ctx.hRRecvCodeEdit, contentX, r1y2, Dpi(160), editH, TRUE);
+        MoveWindow(g_ctx.hRRecvDirLbl, x + cardPad, r2y2 + (editH - Dpi(28)) / 2, labelW, Dpi(28), TRUE);
+        int rDirEditW = innerW - browseW - 6;
+        MoveWindow(g_ctx.hRRecvDirEdit, contentX, r2y2, rDirEditW, editH, TRUE);
+        MoveWindow(g_ctx.hRRecvDirBrowse, contentX + rDirEditW + 6, r2y2, browseW, editH, TRUE);
+        MoveWindow(g_ctx.hRRecvBtn, contentX, r3y2, Dpi(180), btnH, TRUE);
+    }
 
-    int yRS3 = yRS2 + EDIT_H + 14;
-    int codeShowW = 200;
-    MoveWindow(g_ctx.hRSendCodeLbl, x + 12, yRS3 + 4, LABEL_W - 12, 20, TRUE);
-    MoveWindow(g_ctx.hRSendCodeEdit, x + LABEL_W, yRS3, codeShowW, EDIT_H, TRUE);
+    // ===== 进度条卡片 =====
+    int pGap = Dpi(8);
+    int pY = c2y + c2H + pGap;
+    int pH = Dpi(56);
+    g_ctx.rcProgress = {x, pY, x + w, pY + pH};
 
-    int yRS4 = yRS3 + EDIT_H + 16;
-    int rSendBtnW = 160;
-    int rAdvBtnW = 90;
-    MoveWindow(g_ctx.hRSendBtn, x + LABEL_W, yRS4, rSendBtnW, BTN_H, TRUE);
-    MoveWindow(g_ctx.hRSendAdvBtn, x + LABEL_W + rSendBtnW + 10, yRS4, rAdvBtnW, BTN_H, TRUE);
+    // 取消按钮右对齐 (进度条与进度文本由 WM_PAINT 自绘)
+    int cancelW = Dpi(88);
+    int cancelH = Dpi(34);
+    MoveWindow(g_ctx.hCancelBtn, x + w - cardPad - cancelW, pY + (pH - cancelH) / 2,
+               cancelW, cancelH, TRUE);
 
-    // 二维码显示区 (中继发送区域右侧, 默认隐藏, 收到 WM_APP_QR_UPDATE 时显示)
-    int qrImgX = x + rSendGroupW + qrGap;
-    int yQRImg = yRS + 20;
-    MoveWindow(g_ctx.hQrImage, qrImgX, yQRImg, qrImgW, qrImgH, TRUE);
-    int yQRCodeLbl2 = yQRImg + qrImgH + 4;
-    MoveWindow(g_ctx.hQrCodeLbl2, qrImgX, yQRCodeLbl2, qrImgW, 20, TRUE);
+    // ===== 日志卡片 (自适应填充剩余空间) =====
+    int lGap = Dpi(8);
+    int lY = pY + pH + lGap;
+    int lH = cy - lY - margin;
+    if (lH < Dpi(80)) lH = Dpi(80);
+    g_ctx.rcLog = {x, lY, x + w, lY + lH};
 
-    // ===== 中继 - 接收方区域 =====
-    int yRR = yR;  // 与 LAN 接收区同位置 (互斥显示)
-    int rRecvGroupH = 160;
-    MoveWindow(g_ctx.hRRecvGroup, x, yRR, w, rRecvGroupH, TRUE);
-    int yRR2 = yRR + 34;
-    int codeInpW = 200;
-    MoveWindow(g_ctx.hRRecvCodeLbl, x + 12, yRR2 + 4, LABEL_W - 12, 20, TRUE);
-    MoveWindow(g_ctx.hRRecvCodeEdit, x + LABEL_W, yRR2, codeInpW, EDIT_H, TRUE);
+    if (g_ctx.hLogLbl) ShowWindow(g_ctx.hLogLbl, SW_HIDE);
+    int logContentY = lY + Dpi(36);
+    int logContentH = lY + lH - logContentY - cardPad;
+    if (logContentH < Dpi(50)) logContentH = Dpi(50);
+    MoveWindow(g_ctx.hLog, x + cardPad, logContentY, w - cardPad * 2, logContentH, TRUE);
 
-    int yRR3 = yRR2 + EDIT_H + 14;
-    int rDirEditW = w - LABEL_W - BROWSE_W - 18;
-    MoveWindow(g_ctx.hRRecvDirLbl, x + 12, yRR3 + 4, LABEL_W - 12, 20, TRUE);
-    MoveWindow(g_ctx.hRRecvDirEdit, x + LABEL_W, yRR3, rDirEditW, EDIT_H, TRUE);
-    MoveWindow(g_ctx.hRRecvDirBrowse, x + LABEL_W + rDirEditW + 8, yRR3 - 1, BROWSE_W, EDIT_H + 2, TRUE);
-
-    int yRR4 = yRR3 + EDIT_H + 16;
-    MoveWindow(g_ctx.hRRecvBtn, x + LABEL_W, yRR4, 200, BTN_H, TRUE);
-
-    // ===== 进度条 + 取消按钮 =====
-    int yP = yR + (std::max)(recvGroupH, rRecvGroupH) + 12;
-    MoveWindow(g_ctx.hProgress, x, yP, w, 24, TRUE);
-    int cancelW = 110;
-    MoveWindow(g_ctx.hCancelBtn, x + (w - cancelW) / 2, yP + 34, cancelW, BTN_H - 4, TRUE);
-
-    // ===== 日志区 (填充剩余空间) =====
-    int yL = yP + 34 + BTN_H - 4 + 10;
-    MoveWindow(g_ctx.hLogLbl, x, yL, 80, 20, TRUE);
-    int yLog = yL + 24;
-    int logH = cy - yLog - MARGIN;
-    if (logH < 60) logH = 60;
-    MoveWindow(g_ctx.hLog, x, yLog, w, logH, TRUE);
+    // ===== 交通灯按钮 (标题栏右侧) =====
+    int btnSize = Dpi(12);
+    int btnGap = Dpi(6);
+    int btnY = (titleH - btnSize) / 2;
+    int rightEdge = cx - margin;
+    g_ctx.rcBtnCls = { rightEdge - btnSize, btnY, rightEdge, btnY + btnSize };
+    g_ctx.rcBtnMax = { rightEdge - btnSize*2 - btnGap, btnY, rightEdge - btnSize - btnGap, btnY + btnSize };
+    g_ctx.rcBtnMin = { rightEdge - btnSize*3 - btnGap*2, btnY, rightEdge - btnSize*2 - btnGap*2, btnY + btnSize };
 }
 
 // ========== 模式切换: 显示/隐藏对应控件 ==========
@@ -374,32 +560,51 @@ static void ApplyModeVisibility() {
     bool lan = (g_ctx.mode == TransferMode::LAN);
     bool relay = (g_ctx.mode == TransferMode::RELAY);
 
-    // LAN 直连区
+    // 先隐藏所有控件, 确保旧控件不可见
     ShowGroup({
-        g_ctx.hSendGroup,
         g_ctx.hSendPortLbl, g_ctx.hSendPortEdit, g_ctx.hFileLbl, g_ctx.hFileEdit,
         g_ctx.hFileBrowse, g_ctx.hSendBtn,
-        g_ctx.hRecvGroup, g_ctx.hRecvPortLbl, g_ctx.hRecvPortEdit,
+        g_ctx.hRecvPortLbl, g_ctx.hRecvPortEdit,
         g_ctx.hDirLbl, g_ctx.hDirEdit, g_ctx.hDirBrowse, g_ctx.hRecvBtn,
-    }, lan ? TRUE : FALSE);
-
-    // 中继区
-    ShowGroup({
-        g_ctx.hRSendGroup, g_ctx.hRSendFileLbl, g_ctx.hRSendFileEdit,
+        g_ctx.hRSendFileLbl, g_ctx.hRSendFileEdit,
         g_ctx.hRSendFileBrowse, g_ctx.hRSendBtn, g_ctx.hRSendAdvBtn,
         g_ctx.hRSendCodeLbl, g_ctx.hRSendCodeEdit,
-        g_ctx.hRRecvGroup, g_ctx.hRRecvCodeLbl, g_ctx.hRRecvCodeEdit,
+        g_ctx.hRRecvCodeLbl, g_ctx.hRRecvCodeEdit,
         g_ctx.hRRecvDirLbl, g_ctx.hRRecvDirEdit, g_ctx.hRRecvDirBrowse, g_ctx.hRRecvBtn,
-    }, relay ? TRUE : FALSE);
+    }, FALSE);
 
-    // 二维码显示: 中继模式下且已生成时显示, 否则隐藏
+    // 再显示需要的控件
+    if (lan) {
+        ShowGroup({
+            g_ctx.hSendPortLbl, g_ctx.hSendPortEdit, g_ctx.hFileLbl, g_ctx.hFileEdit,
+            g_ctx.hFileBrowse, g_ctx.hSendBtn,
+            g_ctx.hRecvPortLbl, g_ctx.hRecvPortEdit,
+            g_ctx.hDirLbl, g_ctx.hDirEdit, g_ctx.hDirBrowse, g_ctx.hRecvBtn,
+        }, TRUE);
+    }
+
+    if (relay) {
+        ShowGroup({
+            g_ctx.hRSendFileLbl, g_ctx.hRSendFileEdit,
+            g_ctx.hRSendFileBrowse, g_ctx.hRSendBtn, g_ctx.hRSendAdvBtn,
+            g_ctx.hRSendCodeLbl, g_ctx.hRSendCodeEdit,
+            g_ctx.hRRecvCodeLbl, g_ctx.hRRecvCodeEdit,
+            g_ctx.hRRecvDirLbl, g_ctx.hRRecvDirEdit, g_ctx.hRRecvDirBrowse, g_ctx.hRRecvBtn,
+        }, TRUE);
+    }
+
+    // 二维码显示
     ShowWindow(g_ctx.hQrImage, relay && !g_ctx.qr_data.empty() ? SW_SHOW : SW_HIDE);
     ShowWindow(g_ctx.hQrCodeLbl2, relay && !g_ctx.qr_data.empty() ? SW_SHOW : SW_HIDE);
 
-    // 强制重新布局
+    // 重新布局 + 同步刷新
     RECT rc;
     GetClientRect(g_ctx.hwnd, &rc);
     DoLayout(rc.right, rc.bottom);
+    // 强制同步刷新 Tab 按钮 (使用 RedrawWindow 代替 InvalidateRect 立即生效)
+    if (g_ctx.hModeLan) RedrawWindow(g_ctx.hModeLan, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+    if (g_ctx.hModeRelay) RedrawWindow(g_ctx.hModeRelay, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+    RedrawWindow(g_ctx.hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
 }
 
 // ========== 启用/禁用控件 ==========
@@ -513,6 +718,12 @@ static void TransferThread_LAN(bool is_send, std::string ip,
     if (is_send && ip.empty()) {
         // 发送模式: 自动发现局域网内的接收端
         cb(0, 0, "[信息] 正在搜索局域网内的接收端...");
+        // 打印本机 IP, 便于排查广播是否已发出
+        auto local_ips = ft::get_local_ipv4_addresses();
+        std::string ipinfo = "[信息] 本机 IP: ";
+        for (std::size_t i = 0; i < local_ips.size(); ++i)
+            ipinfo += (i ? ", " : "") + local_ips[i];
+        cb(0, 0, ipinfo);
         auto peers = ft::discover_peers(port, 1500);
         if (peers.empty()) {
             cb(0, 0, "[错误] 未发现局域网内的接收端 (请确认接收方已启动并使用相同端口)");
@@ -1006,8 +1217,7 @@ static LRESULT CALLBACK CloseDlgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM 
     
     case WM_PAINT: {
         PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hWnd, &ps);
-        // 背景由 WM_ERASEBKGND 处理
+        BeginPaint(hWnd, &ps);
         EndPaint(hWnd, &ps);
         
         PaintDlgBackground(hWnd);
@@ -1271,35 +1481,79 @@ struct AdvRelayDlgState {
     HWND hwnd = nullptr;
     HWND hIpEdit = nullptr;
     HWND hPortEdit = nullptr;
+    HWND hBtnOk = nullptr, hBtnClear = nullptr, hBtnCancel = nullptr;
     bool confirmed = false;
     bool use_custom = false;
     std::string ip;
     unsigned short port = 0;
+    // 自绘样式状态
+    RECT rcClose = {};           // 标题栏关闭按钮
+    bool hoverClose = false, pressClose = false;
+    bool hoverOk = false, hoverClear = false, hoverCancel = false;
 };
 static AdvRelayDlgState g_adv;
 
 // 高级设置对话框窗口过程
+// 前向声明 (定义在文件后面, 但对话框代码在前)
+static void DrawGradientRoundRect(HDC hdc, const RECT& rc, int radius,
+                                  COLORREF c1, COLORREF c2, bool vertical);
+static void DrawSolidRoundRect(HDC hdc, const RECT& rc, int radius,
+                               COLORREF fill, COLORREF border, int borderWidth);
+
+// 高级设置对话框按钮绘制 (与主程序按钮风格一致)
+static void DrawAdvButton(HDC hdc, const RECT& rc, const wchar_t* text,
+                          bool primary, bool pressed, bool hover) {
+    HFONT oldF = (HFONT)SelectObject(hdc, g_ctx.hFontBtn);
+    SetBkMode(hdc, TRANSPARENT);
+    if (primary) {
+        // 主按钮: 蓝紫渐变
+        COLORREF c1, c2;
+        if (pressed) { c1 = RGB(91,101,192); c2 = RGB(109,120,218); }
+        else if (hover) { c1 = RGB(117,127,222); c2 = RGB(149,160,255); }
+        else { c1 = RGB(107,117,212); c2 = RGB(129,140,248); }
+        DrawGradientRoundRect(hdc, rc, 8, c1, c2, false);
+        SetTextColor(hdc, RGB(255,255,255));
+    } else {
+        // 次要按钮: 白底浅边框
+        COLORREF fill, border, tc;
+        if (pressed) { fill = RGB(238,242,250); border = RGB(165,180,252); tc = RGB(107,117,212); }
+        else if (hover) { fill = RGB(245,248,255); border = RGB(165,180,252); tc = RGB(107,117,212); }
+        else { fill = RGB(255,255,255); border = RGB(224,230,240); tc = RGB(100,116,139); }
+        DrawSolidRoundRect(hdc, rc, 8, fill, border, 1);
+        SetTextColor(hdc, tc);
+    }
+    RECT trc = rc;
+    if (pressed) OffsetRect(&trc, 1, 1);
+    DrawTextW(hdc, text, -1, &trc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(hdc, oldF);
+}
+
 static LRESULT CALLBACK AdvRelayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE: {
-        // 创建子控件
-        HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        auto d = Dpi;
+        int x0 = d(32);
+        int eW = d(400) - x0 * 2;
+        int eH = d(44);
+        int lblH = d(24);
+        int btnH = d(40);
+        int btnY = d(316);
 
+        // 标签
         CreateWindowExW(0, L"STATIC", L"中继服务器 IP:",
             WS_CHILD | WS_VISIBLE | SS_LEFT,
-            20, 22, 120, 18, hWnd, (HMENU)IDC_AR_IP_LABEL, g_ctx.hInst, nullptr);
+            x0, d(76), d(120), lblH, hWnd, (HMENU)IDC_AR_IP_LABEL, g_ctx.hInst, nullptr);
 
-        g_adv.hIpEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-            WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
-            150, 20, 200, 22, hWnd, (HMENU)IDC_AR_IP_EDIT, g_ctx.hInst, nullptr);
+        // IP 输入框 (自绘圆角, 文字居中, placeholder)
+        g_adv.hIpEdit = CreateEditCentered(hWnd, L"输入自定义中继服务器 IP", L"", 0, IDC_AR_IP_EDIT);
 
+        // 端口标签
         CreateWindowExW(0, L"STATIC", L"端口:",
             WS_CHILD | WS_VISIBLE | SS_LEFT,
-            20, 52, 120, 18, hWnd, (HMENU)IDC_AR_PORT_LABEL, g_ctx.hInst, nullptr);
+            x0, d(160), d(120), lblH, hWnd, (HMENU)IDC_AR_PORT_LABEL, g_ctx.hInst, nullptr);
 
-        g_adv.hPortEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-            WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_NUMBER,
-            150, 50, 80, 22, hWnd, (HMENU)IDC_AR_PORT_EDIT, g_ctx.hInst, nullptr);
+        // 端口输入框
+        g_adv.hPortEdit = CreateEditCentered(hWnd, L"端口号", L"", ES_NUMBER, IDC_AR_PORT_EDIT);
 
         // 提示文字 (根据是否已设置自定义服务器显示不同状态, 不暴露具体 IP)
         std::wstring hint_text;
@@ -1310,33 +1564,143 @@ static LRESULT CALLBACK AdvRelayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPAR
             hint_text = L"当前状态: 使用内置中继服务器 (默认)\r\n"
                         L"如需切换到自定义服务器, 请输入地址和端口后点击\"确定\"。";
         }
-        CreateWindowExW(0, L"STATIC",
-            hint_text.c_str(),
+        HWND hHint = CreateWindowExW(0, L"STATIC", hint_text.c_str(),
             WS_CHILD | WS_VISIBLE | SS_LEFT,
-            20, 82, 340, 32, hWnd, (HMENU)IDC_AR_HINT, g_ctx.hInst, nullptr);
+            x0, d(244), eW, d(48), hWnd, (HMENU)IDC_AR_HINT, g_ctx.hInst, nullptr);
 
-        CreateWindowExW(0, L"BUTTON", L"确定",
-            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_DEFPUSHBUTTON,
-            80, 145, 80, 28, hWnd, (HMENU)IDC_AR_OK, g_ctx.hInst, nullptr);
+        // 按钮行 (右对齐: 确定 / 恢复默认 / 取消)
+        g_adv.hBtnOk = CreateWindowExW(0, L"BUTTON", L"确定",
+            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | BS_PUSHBUTTON,
+            d(400) - x0 - d(88), btnY, d(88), btnH, hWnd, (HMENU)IDC_AR_OK, g_ctx.hInst, nullptr);
+        g_adv.hBtnClear = CreateWindowExW(0, L"BUTTON", L"恢复默认",
+            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | BS_PUSHBUTTON,
+            d(400) - x0 - d(88) - d(8) - d(96), btnY, d(96), btnH,
+            hWnd, (HMENU)IDC_AR_CLEAR, g_ctx.hInst, nullptr);
+        g_adv.hBtnCancel = CreateWindowExW(0, L"BUTTON", L"取消",
+            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | BS_PUSHBUTTON,
+            d(400) - x0 - d(88) - d(8) - d(96) - d(8) - d(72), btnY, d(72), btnH,
+            hWnd, (HMENU)IDC_AR_CANCEL, g_ctx.hInst, nullptr);
 
-        CreateWindowExW(0, L"BUTTON", L"恢复默认",
-            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-            175, 145, 80, 28, hWnd, (HMENU)IDC_AR_CLEAR, g_ctx.hInst, nullptr);
+        // 字体: 标签/提示用小号字体, 按钮用按钮字体
+        SendMessageW(GetDlgItem(hWnd, IDC_AR_IP_LABEL), WM_SETFONT, (WPARAM)g_ctx.hFontSmall, TRUE);
+        SendMessageW(GetDlgItem(hWnd, IDC_AR_PORT_LABEL), WM_SETFONT, (WPARAM)g_ctx.hFontSmall, TRUE);
+        SendMessageW(hHint, WM_SETFONT, (WPARAM)g_ctx.hFontSmall, TRUE);
+        SendMessageW(g_adv.hBtnOk, WM_SETFONT, (WPARAM)g_ctx.hFontBtn, TRUE);
+        SendMessageW(g_adv.hBtnClear, WM_SETFONT, (WPARAM)g_ctx.hFontBtn, TRUE);
+        SendMessageW(g_adv.hBtnCancel, WM_SETFONT, (WPARAM)g_ctx.hFontBtn, TRUE);
 
-        CreateWindowExW(0, L"BUTTON", L"取消",
-            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-            270, 145, 80, 28, hWnd, (HMENU)IDC_AR_CANCEL, g_ctx.hInst, nullptr);
+        // 关闭按钮矩形 (标题栏右上角, 红点风格, 与主程序一致)
+        g_adv.rcClose = { d(400) - d(46), d(15), d(400) - d(24), d(36) };
 
-        // 设置字体
-        EnumChildWindows(hWnd, [](HWND hChild, LPARAM lParam) -> BOOL {
-            SendMessageW(hChild, WM_SETFONT, (WPARAM)lParam, TRUE);
-            return TRUE;
-        }, (LPARAM)hFont);
-
-        // 占位提示 (不预填真实地址, 出于安全考虑避免在 UI 中暴露 IP)
-        SendMessageW(g_adv.hIpEdit, EM_SETCUEBANNER, TRUE, (LPARAM)L"输入自定义中继服务器 IP");
-        SendMessageW(g_adv.hPortEdit, EM_SETCUEBANNER, TRUE, (LPARAM)L"端口号");
+        // 输入框位置
+        MoveWindow(g_adv.hIpEdit, x0, d(104), eW, eH, TRUE);
+        MoveWindow(g_adv.hPortEdit, x0, d(188), eW, eH, TRUE);
         return 0;
+    }
+
+    case WM_NCHITTEST: {
+        // 标题栏可拖动, 关闭按钮区域自己处理点击
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        POINT cpt = pt;
+        ScreenToClient(hWnd, &cpt);
+        if (PtInRect(&g_adv.rcClose, cpt)) return HTCLIENT;
+        if (cpt.y >= 0 && cpt.y <= Dpi(52)) return HTCAPTION;
+        return HTCLIENT;
+    }
+
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        int titleH = Dpi(52);
+        // 标题栏蓝紫渐变 (与主程序一致)
+        TRIVERTEX tv[2] = {};
+        tv[0].x = 0; tv[0].y = 0;
+        tv[0].Red = 120 << 8; tv[0].Green = 130 << 8; tv[0].Blue = 220 << 8; tv[0].Alpha = 0;
+        tv[1].x = rc.right; tv[1].y = titleH;
+        tv[1].Red = 107 << 8; tv[1].Green = 117 << 8; tv[1].Blue = 212 << 8; tv[1].Alpha = 0;
+        GRADIENT_RECT gr = {0, 1};
+        GradientFill(hdc, tv, 2, &gr, 1, GRADIENT_FILL_RECT_H);
+        // 标题文字
+        HFONT oldF = (HFONT)SelectObject(hdc, g_ctx.hFontCard);
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(255,255,255));
+        RECT tRc = { Dpi(24), 0, rc.right - Dpi(56), titleH };
+        DrawTextW(hdc, L"高级设置", -1, &tRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(hdc, oldF);
+        // 关闭按钮 (红点, 与主程序交通灯关闭键一致)
+        HPEN hNullPen = CreatePen(PS_NULL, 0, 0);
+        HPEN oldPen = (HPEN)SelectObject(hdc, hNullPen);
+        HBRUSH hClose = CreateSolidBrush(g_adv.hoverClose ? RGB(255,120,120) : RGB(255,107,107));
+        HBRUSH oldBr = (HBRUSH)SelectObject(hdc, hClose);
+        Ellipse(hdc, g_adv.rcClose.left, g_adv.rcClose.top,
+                g_adv.rcClose.right, g_adv.rcClose.bottom);
+        SelectObject(hdc, oldBr);
+        SelectObject(hdc, oldPen);
+        DeleteObject(hNullPen);
+        DeleteObject(hClose);
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+
+    case WM_MOUSEMOVE: {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        HWND hOver = ChildWindowFromPoint(hWnd, pt);
+        bool nOk = (hOver == g_adv.hBtnOk);
+        bool nClear = (hOver == g_adv.hBtnClear);
+        bool nCancel = (hOver == g_adv.hBtnCancel);
+        if (nOk != g_adv.hoverOk) { g_adv.hoverOk = nOk; InvalidateRect(g_adv.hBtnOk, nullptr, FALSE); }
+        if (nClear != g_adv.hoverClear) { g_adv.hoverClear = nClear; InvalidateRect(g_adv.hBtnClear, nullptr, FALSE); }
+        if (nCancel != g_adv.hoverCancel) { g_adv.hoverCancel = nCancel; InvalidateRect(g_adv.hBtnCancel, nullptr, FALSE); }
+        bool nClose = PtInRect(&g_adv.rcClose, pt);
+        if (nClose != g_adv.hoverClose) { g_adv.hoverClose = nClose; InvalidateRect(hWnd, &g_adv.rcClose, TRUE); }
+        break;
+    }
+
+    case WM_LBUTTONDOWN: {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        if (PtInRect(&g_adv.rcClose, pt)) {
+            g_adv.pressClose = true;
+            InvalidateRect(hWnd, &g_adv.rcClose, TRUE);
+        }
+        break;
+    }
+
+    case WM_LBUTTONUP: {
+        if (g_adv.pressClose) {
+            g_adv.pressClose = false;
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (PtInRect(&g_adv.rcClose, pt)) {
+                g_adv.confirmed = false;
+                DestroyWindow(hWnd);
+                return 0;
+            }
+            InvalidateRect(hWnd, &g_adv.rcClose, TRUE);
+        }
+        break;
+    }
+
+    case WM_DRAWITEM: {
+        auto* dis = (DRAWITEMSTRUCT*)lParam;
+        if (dis->CtlType != ODT_BUTTON) break;
+        bool pressed = (dis->itemState & ODS_SELECTED) != 0;
+        bool hover = (dis->CtlID == IDC_AR_OK) ? g_adv.hoverOk
+                   : (dis->CtlID == IDC_AR_CLEAR) ? g_adv.hoverClear
+                   : (dis->CtlID == IDC_AR_CANCEL) ? g_adv.hoverCancel : false;
+        const wchar_t* text = (dis->CtlID == IDC_AR_OK) ? L"确定"
+                            : (dis->CtlID == IDC_AR_CLEAR) ? L"恢复默认" : L"取消";
+        DrawAdvButton(dis->hDC, dis->rcItem, text, dis->CtlID == IDC_AR_OK, pressed, hover);
+        return TRUE;
+    }
+
+    case WM_CTLCOLORSTATIC: {
+        // 静态控件: 白底 + 灰色文字
+        HDC hdc = (HDC)wParam;
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(100,116,139));
+        static HBRUSH hWhite = CreateSolidBrush(RGB(255,255,255));
+        return (INT_PTR)hWhite;
     }
 
     case WM_COMMAND: {
@@ -1414,7 +1778,7 @@ static bool ShowAdvRelayDialog(HWND hParent) {
         registered = true;
     }
 
-    int dlgW = 380, dlgH = 220;
+    int dlgW = Dpi(400), dlgH = Dpi(384);
 
     // 计算居中位置
     RECT parentRc;
@@ -1422,16 +1786,20 @@ static bool ShowAdvRelayDialog(HWND hParent) {
     int x = parentRc.left + (parentRc.right - parentRc.left - dlgW) / 2;
     int y = parentRc.top + (parentRc.bottom - parentRc.top - dlgH) / 2;
 
-    // 创建窗口
+    // 创建窗口 (无边框, 自绘标题栏, 与主程序风格一致)
     HWND hDlg = CreateWindowExW(0,
         L"SilexAdvRelayDlg",
         L"高级设置 - 自定义中继服务器",
-        WS_POPUP | WS_CAPTION | WS_SYSMENU,
+        WS_POPUP,
         x, y, dlgW, dlgH,
         hParent, nullptr, g_ctx.hInst, nullptr);
 
     if (!hDlg) return false;
     g_adv.hwnd = hDlg;
+
+    // 无边框窗口圆角 (与主程序一致)
+    DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
+    DwmSetWindowAttribute(hDlg, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
 
     // 禁用父窗口
     EnableWindow(hParent, FALSE);
@@ -1530,6 +1898,470 @@ static HBITMAP GenerateQrBitmap(const std::string& text, int pixel_size, int& ou
     return hBmp;
 }
 
+// ========== 卡片式 UI 绘制辅助函数 ==========
+
+// 绘制渐变填充的圆角矩形 (用裁剪区域 + GradientFill)
+static void DrawGradientRoundRect(HDC hdc, const RECT& rc, int radius,
+                                   COLORREF c1, COLORREF c2, bool vertical) {
+    HRGN hRgn = CreateRoundRectRgn(rc.left, rc.top, rc.right + 1, rc.bottom + 1,
+                                    radius, radius);
+    SelectClipRgn(hdc, hRgn);
+    TRIVERTEX vert[2] = {};
+    vert[0].x = rc.left; vert[0].y = rc.top;
+    vert[0].Red = (COLOR16)(GetRValue(c1) << 8);
+    vert[0].Green = (COLOR16)(GetGValue(c1) << 8);
+    vert[0].Blue = (COLOR16)(GetBValue(c1) << 8);
+    vert[0].Alpha = 0;
+    vert[1].x = rc.right; vert[1].y = rc.bottom;
+    vert[1].Red = (COLOR16)(GetRValue(c2) << 8);
+    vert[1].Green = (COLOR16)(GetGValue(c2) << 8);
+    vert[1].Blue = (COLOR16)(GetBValue(c2) << 8);
+    vert[1].Alpha = 0;
+    GRADIENT_RECT gRect = {0, 1};
+    GradientFill(hdc, vert, 2, &gRect, 1,
+                 vertical ? GRADIENT_FILL_RECT_V : GRADIENT_FILL_RECT_H);
+    SelectClipRgn(hdc, nullptr);
+    DeleteObject(hRgn);
+}
+
+// 绘制纯色填充的圆角矩形 (带边框)
+static void DrawSolidRoundRect(HDC hdc, const RECT& rc, int radius,
+                                COLORREF fill, COLORREF border, int borderWidth = 1) {
+    HBRUSH hBrush = CreateSolidBrush(fill);
+    HPEN hPen = CreatePen(PS_SOLID, borderWidth, border);
+    HPEN oldPen = (HPEN)SelectObject(hdc, hPen);
+    HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, hBrush);
+    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, radius, radius);
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
+    DeleteObject(hBrush);
+    DeleteObject(hPen);
+}
+
+// 绘制卡片 (白色圆角矩形 + 微妙阴影)
+static void DrawCard(HDC hdc, const RECT& rc) {
+    // 微妙阴影 (下方偏移2px + 模糊效果)
+    RECT shadowRc = rc;
+    OffsetRect(&shadowRc, 0, 2);
+    DrawSolidRoundRect(hdc, shadowRc, Dpi(CARD_RADIUS),
+                       RGB(231,236,247), RGB(231,236,247));
+    // 卡片本体
+    DrawSolidRoundRect(hdc, rc, Dpi(CARD_RADIUS),
+                       RGB(255,255,255), RGB(234,238,247));
+}
+
+// 绘制卡片头部 (彩色图标方块 + 标题 + 右侧描述)
+static void DrawCardHeader(HDC hdc, const RECT& cardRc, const wchar_t* title,
+                           const wchar_t* desc, bool sendIcon) {
+    int iconSize = Dpi(28);
+    int iconX = cardRc.left + Dpi(CARD_PADDING);
+    int iconY = cardRc.top + Dpi(CARD_PADDING);
+    RECT iconRc = {iconX, iconY, iconX + iconSize, iconY + iconSize};
+
+    // 图标方块: 渐变填充圆角
+    if (sendIcon) {
+        DrawGradientRoundRect(hdc, iconRc, 7, RGB(107,117,212), RGB(129,140,248), false);
+    } else {
+        DrawGradientRoundRect(hdc, iconRc, 7, RGB(14,165,233), RGB(56,189,248), false);
+    }
+
+    // 图标内箭头
+    HFONT oldFont = (HFONT)SelectObject(hdc, g_ctx.hFontCard);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(255,255,255));
+    RECT iconTextRc = iconRc;
+    DrawTextW(hdc, sendIcon ? L"\u2191" : L"\u2193", -1, &iconTextRc,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    // 标题文字
+    int titleX = iconX + iconSize + Dpi(10);
+    RECT titleRc = {titleX, iconY, cardRc.right - Dpi(CARD_PADDING), iconY + iconSize};
+    SetTextColor(hdc, RGB(30,41,59));
+    DrawTextW(hdc, title, -1, &titleRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    // 描述文字 (右侧灰色)
+    if (desc) {
+        SelectObject(hdc, g_ctx.hFontSmall);
+        SetTextColor(hdc, RGB(148,163,184));
+        DrawTextW(hdc, desc, -1, &titleRc, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    }
+    SelectObject(hdc, oldFont);
+}
+
+// ========== 自绘长条胶囊进度条 ==========
+// 格式化字节大小: B / KB / MB / GB (1 位小数)
+static std::wstring FormatSize(uint64_t bytes) {
+    double v = (double)bytes;
+    const wchar_t* units[] = { L"B", L"KB", L"MB", L"GB", L"TB" };
+    int u = 0;
+    while (v >= 1024.0 && u < 4) { v /= 1024.0; u++; }
+    wchar_t buf[32];
+    if (u == 0) swprintf_s(buf, L"%d B", (int)bytes);
+    else        swprintf_s(buf, L"%.1f %s", v, units[u]);
+    return buf;
+}
+
+// 进度文本: "65% · 13.0 / 20.0 MB"
+static std::wstring FormatProgressText(uint64_t done, uint64_t total, int pct) {
+    wchar_t buf[64];
+    swprintf_s(buf, L"%d%% \u00b7 %s / %s", pct,
+               FormatSize(done).c_str(), FormatSize(total).c_str());
+    return buf;
+}
+
+// 绘制长条胶囊进度条 + 右侧进度文本 (在进度条卡片内)
+// 布局: [进度条胶囊] [进度文本] [取消按钮]
+static void DrawPillProgress(HDC hdc, const RECT& rcCard) {
+    int pad = Dpi(CARD_PADDING);
+    int barH = Dpi(16);
+    int cancelW = Dpi(88);      // 与 DoLayout 中取消按钮宽度一致
+    int textW = Dpi(190);       // 进度文本区域宽度
+    int gap = Dpi(12);
+
+    int right = rcCard.right - pad - cancelW - gap;
+    RECT textRc = { right - textW, rcCard.top, right, rcCard.bottom };
+    RECT barRc = {
+        rcCard.left + pad,
+        rcCard.top + (rcCard.bottom - rcCard.top - barH) / 2,
+        textRc.left - gap,
+        rcCard.top + (rcCard.bottom - rcCard.top + barH) / 2
+    };
+    int radius = barH / 2;
+
+    // 胶囊背景
+    DrawSolidRoundRect(hdc, barRc, radius, RGB(232,236,245), RGB(232,236,245));
+
+    // 填充部分 (蓝紫渐变)
+    int pct = g_ctx.prog_pct;
+    if (pct > 0) {
+        int fullW = barRc.right - barRc.left;
+        int fillW = (int)((int64_t)fullW * pct / 100);
+        if (fillW < radius * 2) fillW = radius * 2;   // 最小显示一段小胶囊
+        if (fillW > fullW) fillW = fullW;
+        if (fillW > 0) {
+            RECT fillRc = barRc;
+            fillRc.right = barRc.left + fillW;
+            DrawGradientRoundRect(hdc, fillRc, radius, RGB(107,117,212), RGB(139,149,250), false);
+        }
+    }
+
+    // 右侧进度文本
+    HFONT oldF = (HFONT)SelectObject(hdc, g_ctx.hFontSmall);
+    SetBkMode(hdc, TRANSPARENT);
+    std::wstring text;
+    if (g_ctx.prog_active && g_ctx.prog_total > 0) {
+        text = FormatProgressText(g_ctx.prog_done, g_ctx.prog_total, g_ctx.prog_pct);
+        SetTextColor(hdc, RGB(99,110,200));
+    } else {
+        text = L"\u51c6\u5907\u5c31\u7eea";  // 准备就绪
+        SetTextColor(hdc, RGB(148,163,184));
+    }
+    DrawTextW(hdc, text.c_str(), -1, &textRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(hdc, oldF);
+}
+
+// 重置进度条 UI 状态
+static void ResetProgressUI() {
+    g_ctx.prog_pct = 0;
+    g_ctx.prog_done = 0;
+    g_ctx.prog_total = 0;
+    g_ctx.prog_active = false;
+    if (g_ctx.hwnd) InvalidateRect(g_ctx.hwnd, &g_ctx.rcProgress, FALSE);
+}
+
+// 主窗口 WM_PAINT: 绘制背景、标题栏、标签栏、卡片
+static void PaintMainWindow(HWND hWnd) {
+    PAINTSTRUCT ps;
+    HDC hdc = BeginPaint(hWnd, &ps);
+
+    RECT rcClient;
+    GetClientRect(hWnd, &rcClient);
+    int w = rcClient.right;
+
+    // 1. 主背景
+    HBRUSH hBgBrush = CreateSolidBrush(RGB(245,247,252));
+    FillRect(hdc, &rcClient, hBgBrush);
+    DeleteObject(hBgBrush);
+
+    // 2. 标题栏渐变 (#7882dc -> #6b75d4)
+    TRIVERTEX tv[2] = {};
+    tv[0].x = 0; tv[0].y = 0;
+    tv[0].Red = 120 << 8; tv[0].Green = 130 << 8; tv[0].Blue = 220 << 8; tv[0].Alpha = 0;
+    tv[1].x = w; tv[1].y = Dpi(TITLE_BAR_H);
+    tv[1].Red = 107 << 8; tv[1].Green = 117 << 8; tv[1].Blue = 212 << 8; tv[1].Alpha = 0;
+    GRADIENT_RECT gr = {0, 1};
+    GradientFill(hdc, tv, 2, &gr, 1, GRADIENT_FILL_RECT_H);
+
+    // 3. 标题文字 + 左侧 Logo
+    {
+        int logoSize = Dpi(28);
+        int logoX = Dpi(14);
+        int logoY = (Dpi(TITLE_BAR_H) - logoSize) / 2;
+        // Logo 背景: 半透明白色圆角
+        HBRUSH hLogoBg = CreateSolidBrush(RGB(255,255,255));
+        HPEN hNullPen = CreatePen(PS_NULL, 0, 0);
+        HPEN oldPen = (HPEN)SelectObject(hdc, hNullPen);
+        HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, hLogoBg);
+        RoundRect(hdc, logoX, logoY, logoX + logoSize, logoY + logoSize, 5, 5);
+        SelectObject(hdc, oldBrush);
+        SelectObject(hdc, oldPen);
+        DeleteObject(hLogoBg);
+        DeleteObject(hNullPen);
+
+        // Logo 文字 "S"
+        HFONT logoFont = CreateFontW(Dpi(18), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                     FF_DONTCARE, L"Segoe UI");
+        HFONT oldLogoFont = (HFONT)SelectObject(hdc, logoFont);
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(107,117,212));
+        RECT logoTextRc = {logoX, logoY, logoX + logoSize, logoY + logoSize};
+        DrawTextW(hdc, L"S", -1, &logoTextRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(hdc, oldLogoFont);
+        DeleteObject(logoFont);
+    }
+
+    // 标题文字
+    HFONT oldFont = (HFONT)SelectObject(hdc, g_ctx.hFontTitle);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(255,255,255));
+    RECT titleTextRc = {Dpi(44), 8, w - Dpi(MARGIN) - Dpi(90), Dpi(TITLE_BAR_H) - 8};
+    DrawTextW(hdc, L"\u81f4\u4f20 Silex v0.1.0", -1, &titleTextRc,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    // 3.5 交通灯按钮 (macOS 风格)
+    {
+        HPEN hNullPen = CreatePen(PS_NULL, 0, 0);
+        HPEN oldPen = (HPEN)SelectObject(hdc, hNullPen);
+
+        // 最小化 (黄色)
+        HBRUSH hBrush;
+        hBrush = CreateSolidBrush(g_ctx.hoverMin ? RGB(255,210,80) : RGB(255,200,61));
+        HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, hBrush);
+        Ellipse(hdc, g_ctx.rcBtnMin.left, g_ctx.rcBtnMin.top,
+                g_ctx.rcBtnMin.right, g_ctx.rcBtnMin.bottom);
+
+        // 最大化 (绿色)
+        hBrush = CreateSolidBrush(g_ctx.hoverMax ? RGB(100,220,120) : RGB(81,207,102));
+        SelectObject(hdc, hBrush);
+        Ellipse(hdc, g_ctx.rcBtnMax.left, g_ctx.rcBtnMax.top,
+                g_ctx.rcBtnMax.right, g_ctx.rcBtnMax.bottom);
+
+        // 关闭 (红色)
+        hBrush = CreateSolidBrush(g_ctx.hoverCls ? RGB(255,120,120) : RGB(255,107,107));
+        SelectObject(hdc, hBrush);
+        Ellipse(hdc, g_ctx.rcBtnCls.left, g_ctx.rcBtnCls.top,
+                g_ctx.rcBtnCls.right, g_ctx.rcBtnCls.bottom);
+
+        SelectObject(hdc, oldBrush);
+        SelectObject(hdc, oldPen);
+        DeleteObject(hNullPen);
+    }
+
+    // 4. 模式标签栏背景 (灰色圆角药丸)
+    if (g_ctx.rcTabBar.right > g_ctx.rcTabBar.left) {
+        DrawSolidRoundRect(hdc, g_ctx.rcTabBar, Dpi(TAB_H) - 6,
+                           RGB(232,236,248), RGB(232,236,248));
+    }
+
+    // 5. 绘制卡片 + 卡片头部
+    bool lan = (g_ctx.mode == TransferMode::LAN);
+
+    // 卡片1 (发送)
+    DrawCard(hdc, g_ctx.rcCard1);
+    if (lan)
+        DrawCardHeader(hdc, g_ctx.rcCard1, L"\u53d1\u9001\u6587\u4ef6",
+                       L"\u81ea\u52a8\u53d1\u73b0\u63a5\u6536\u7aef", true);
+    else
+        DrawCardHeader(hdc, g_ctx.rcCard1, L"\u4e2d\u7ee7\u53d1\u9001",
+                       L"\u521b\u5efa\u623f\u95f4", true);
+
+    // 卡片2 (接收)
+    DrawCard(hdc, g_ctx.rcCard2);
+    if (lan)
+        DrawCardHeader(hdc, g_ctx.rcCard2, L"\u63a5\u6536\u6587\u4ef6",
+                       L"\u76f4\u8fde - \u670d\u52a1\u7aef", false);
+    else
+        DrawCardHeader(hdc, g_ctx.rcCard2, L"\u4e2d\u7ee7\u63a5\u6536",
+                       L"\u8f93\u5165\u623f\u95f4\u7801", false);
+
+    // 进度条卡片
+    DrawCard(hdc, g_ctx.rcProgress);
+    DrawPillProgress(hdc, g_ctx.rcProgress);
+
+    // 日志卡片
+    DrawCard(hdc, g_ctx.rcLog);
+
+    // 日志卡片头部 (绿点 + "状态日志")
+    if (g_ctx.rcLog.right > g_ctx.rcLog.left) {
+        int dotSize = Dpi(10);
+        int dotX = g_ctx.rcLog.left + Dpi(CARD_PADDING);
+        int dotY = g_ctx.rcLog.top + Dpi(16);
+        HBRUSH hDotBrush = CreateSolidBrush(RGB(34,197,94));
+        HPEN hNullPen = CreatePen(PS_NULL, 0, 0);
+        HPEN oldPen = (HPEN)SelectObject(hdc, hNullPen);
+        HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, hDotBrush);
+        Ellipse(hdc, dotX, dotY, dotX + dotSize, dotY + dotSize);
+        SelectObject(hdc, oldBrush);
+        SelectObject(hdc, oldPen);
+        DeleteObject(hNullPen);
+        DeleteObject(hDotBrush);
+
+        SelectObject(hdc, g_ctx.hFontCard);
+        SetTextColor(hdc, RGB(100,116,139));
+        RECT logTitleRc = {dotX + dotSize + Dpi(8), g_ctx.rcLog.top + Dpi(8),
+                           g_ctx.rcLog.right - Dpi(CARD_PADDING), g_ctx.rcLog.top + Dpi(36)};
+        DrawTextW(hdc, L"\u72b6\u6001\u65e5\u5fd7", -1, &logTitleRc,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    SelectObject(hdc, oldFont);
+
+    EndPaint(hWnd, &ps);
+}
+
+// Owner-Draw 按钮绘制
+static void DrawODButton(DRAWITEMSTRUCT* dis) {
+    if (dis->CtlType != ODT_BUTTON) return;
+    HDC hdc = dis->hDC;
+    RECT rc = dis->rcItem;
+    int id = dis->CtlID;
+    bool pressed = (dis->itemState & ODS_SELECTED) != 0;
+    bool disabled = (dis->itemState & ODS_DISABLED) != 0;
+
+    wchar_t text[64] = {};
+    GetWindowTextW(dis->hwndItem, text, 64);
+
+    HFONT oldFont = (HFONT)SelectObject(hdc, g_ctx.hFontBtn);
+    SetBkMode(hdc, TRANSPARENT);
+
+    if (id == IDC_MODE_LAN || id == IDC_MODE_RELAY) {
+        // ===== Tab 按钮 (专用大字字体) =====
+        SelectObject(hdc, g_ctx.hFontTab);
+        bool selected = (id == IDC_MODE_LAN && g_ctx.mode == TransferMode::LAN) ||
+                        (id == IDC_MODE_RELAY && g_ctx.mode == TransferMode::RELAY);
+        bool hover = (id == IDC_MODE_LAN && g_ctx.hoverTabLan) ||
+                     (id == IDC_MODE_RELAY && g_ctx.hoverTabRelay);
+
+        if (selected) {
+            // 选中态: 白色卡片 + 阴影
+            RECT shadowRc = rc;
+            OffsetRect(&shadowRc, 0, 1);
+            DrawSolidRoundRect(hdc, shadowRc, 8, RGB(200,210,235), RGB(200,210,235));
+            DrawSolidRoundRect(hdc, rc, 8, RGB(255,255,255), RGB(255,255,255));
+        } else if (pressed) {
+            // 按下态: 深蓝紫色
+            DrawSolidRoundRect(hdc, rc, 8, RGB(222,226,245), RGB(222,226,245));
+        } else if (hover) {
+            // 悬停态: 浅灰色
+            DrawSolidRoundRect(hdc, rc, 8, RGB(240,243,250), RGB(240,243,250));
+        } else {
+            // 普通态: 与标签栏背景一致
+            DrawSolidRoundRect(hdc, rc, 8, RGB(232,236,248), RGB(232,236,248));
+        }
+        SetTextColor(hdc, selected ? RGB(107,117,212) : RGB(107,114,128));
+        RECT textRc = rc;
+        DrawTextW(hdc, text, -1, &textRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(hdc, g_ctx.hFontBtn); // 恢复默认按钮字体
+
+    } else if (id == IDC_SEND_BTN || id == IDC_RECV_BTN ||
+               id == IDC_RSEND_BTN || id == IDC_RRECV_BTN) {
+        // ===== 主按钮: 蓝紫渐变 =====
+        bool hover = (id == IDC_SEND_BTN && g_ctx.hoverSend) ||
+                     (id == IDC_RECV_BTN && g_ctx.hoverRecv) ||
+                     (id == IDC_RSEND_BTN && g_ctx.hoverRSend) ||
+                     (id == IDC_RRECV_BTN && g_ctx.hoverRRecv);
+
+        COLORREF c1, c2;
+        if (disabled) { c1 = RGB(170,175,210); c2 = RGB(190,195,225); }
+        else if (pressed) { c1 = RGB(91,101,192); c2 = RGB(109,120,218); }
+        else if (hover) { c1 = RGB(117,127,222); c2 = RGB(149,160,255); }
+        else { c1 = RGB(107,117,212); c2 = RGB(129,140,248); }
+
+        DrawGradientRoundRect(hdc, rc, 8, c1, c2, false);
+        SetTextColor(hdc, RGB(255,255,255));
+        RECT textRc = rc;
+        if (pressed) OffsetRect(&textRc, 1, 1);
+        DrawTextW(hdc, text, -1, &textRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    } else {
+        // ===== 浏览/次要按钮: 白底浅边框 =====
+        bool hover = (id == IDC_FILE_BROWSE && g_ctx.hoverBrowse1) ||
+                     (id == IDC_DIR_BROWSE && g_ctx.hoverBrowse2) ||
+                     (id == IDC_RSEND_FILE_BROWSE && g_ctx.hoverBrowse3) ||
+                     (id == IDC_RRECV_DIR_BROWSE && g_ctx.hoverBrowse4) ||
+                     (id == IDC_RSEND_ADV_BTN && g_ctx.hoverAdv) ||
+                     (id == IDC_CANCEL_BTN && g_ctx.hoverCancel);
+
+        COLORREF fill, border, textColor;
+        if (disabled) {
+            fill = RGB(245,247,252); border = RGB(224,230,240); textColor = RGB(180,190,200);
+        } else if (pressed) {
+            fill = RGB(238,242,250); border = RGB(165,180,252); textColor = RGB(107,117,212);
+        } else if (hover) {
+            fill = RGB(245,248,255); border = RGB(165,180,252); textColor = RGB(107,117,212);
+        } else {
+            fill = RGB(255,255,255); border = RGB(224,230,240); textColor = RGB(100,116,139);
+        }
+
+        DrawSolidRoundRect(hdc, rc, 8, fill, border);
+        SetTextColor(hdc, textColor);
+        RECT textRc = rc;
+        if (pressed) OffsetRect(&textRc, 1, 1);
+        DrawTextW(hdc, text, -1, &textRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    SelectObject(hdc, oldFont);
+}
+
+// 更新所有按钮的悬停状态 (通过定时器调用)
+static void UpdateHoverStates() {
+    POINT pt;
+    GetCursorPos(&pt);
+    HWND hOver = WindowFromPoint(pt);
+
+    struct { HWND hwnd; bool* flag; } checks[] = {
+        {g_ctx.hModeLan, &g_ctx.hoverTabLan},
+        {g_ctx.hModeRelay, &g_ctx.hoverTabRelay},
+        {g_ctx.hSendBtn, &g_ctx.hoverSend},
+        {g_ctx.hRecvBtn, &g_ctx.hoverRecv},
+        {g_ctx.hRSendBtn, &g_ctx.hoverRSend},
+        {g_ctx.hRRecvBtn, &g_ctx.hoverRRecv},
+        {g_ctx.hFileBrowse, &g_ctx.hoverBrowse1},
+        {g_ctx.hDirBrowse, &g_ctx.hoverBrowse2},
+        {g_ctx.hRSendFileBrowse, &g_ctx.hoverBrowse3},
+        {g_ctx.hRRecvDirBrowse, &g_ctx.hoverBrowse4},
+        {g_ctx.hRSendAdvBtn, &g_ctx.hoverAdv},
+        {g_ctx.hCancelBtn, &g_ctx.hoverCancel},
+    };
+
+    for (auto& c : checks) {
+        bool newHover = (hOver == c.hwnd);
+        if (newHover != *c.flag) {
+            *c.flag = newHover;
+            if (c.hwnd && IsWindowVisible(c.hwnd))
+                InvalidateRect(c.hwnd, nullptr, FALSE);
+        }
+    }
+
+    // 交通灯按钮 hover 检测 (在主窗口客户区)
+    POINT ptClient = pt;
+    if (ScreenToClient(g_ctx.hwnd, &ptClient)) {
+        bool newMin = PtInRect(&g_ctx.rcBtnMin, ptClient);
+        bool newMax = PtInRect(&g_ctx.rcBtnMax, ptClient);
+        bool newCls = PtInRect(&g_ctx.rcBtnCls, ptClient);
+        if (newMin != g_ctx.hoverMin || newMax != g_ctx.hoverMax || newCls != g_ctx.hoverCls) {
+            g_ctx.hoverMin = newMin;
+            g_ctx.hoverMax = newMax;
+            g_ctx.hoverCls = newCls;
+            // 只刷新标题栏区域, 避免整个窗口闪烁
+            RECT rcTitle = {0, 0, g_ctx.rcTabBar.right, Dpi(TITLE_BAR_H)};
+            InvalidateRect(g_ctx.hwnd, &rcTitle, FALSE);
+        }
+    }
+}
+
 // ========== 窗口过程 ==========
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
@@ -1538,128 +2370,309 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         // 启动时非阻塞触发 UAC; 若被拒绝, 进入中继发送模式时会再次重试并等待
         EnsureFirewallRule(false);
 
-        // 创建字体 (18px, 约 13.5pt, 清晰易读)
-        g_ctx.hFont = CreateFontW(18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        // 创建字体 (按 DPI 缩放, 96 DPI 基准)
+        g_dpiScale = GetDpiForWindow(hWnd) / 96.0f;
+        g_ctx.hFont = CreateFontW(Dpi(19), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                   DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                                   CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                   FF_DONTCARE, L"Microsoft YaHei UI");
+        // 卡片式 UI 专用字体
+        g_ctx.hFontTitle = CreateFontW(Dpi(24), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                       CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                       FF_DONTCARE, L"Microsoft YaHei UI");
+        g_ctx.hFontCard = CreateFontW(Dpi(20), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                      CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                      FF_DONTCARE, L"Microsoft YaHei UI");
+        g_ctx.hFontSmall = CreateFontW(Dpi(17), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                       CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                       FF_DONTCARE, L"Microsoft YaHei UI");
+        g_ctx.hFontBtn = CreateFontW(Dpi(18), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                     FF_DONTCARE, L"Microsoft YaHei UI");
+        g_ctx.hFontTab = CreateFontW(Dpi(21), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                     FF_DONTCARE, L"Microsoft YaHei UI");
 
-        // 标题
-        g_ctx.hTitle = CreateCtrl(hWnd, L"static",
-                   L"臻传 Silex v0.0.9 - 文件传输 (局域网 / 房间码中继)",
-                   SS_CENTER, 0, 0, 10, 10, 0);
+        // 标题由 WM_PAINT 直接绘制, 不创建 static 控件
+        g_ctx.hTitle = nullptr;
 
-        // ===== 模式选择区 =====
-        g_ctx.hModeGroup = CreateCtrl(hWnd, L"button", L"传输模式",
-                   BS_GROUPBOX, 0, 0, 10, 10, 0);
-        g_ctx.hModeLan = CreateCtrl(hWnd, L"button", L"局域网直连",
-                   BS_AUTORADIOBUTTON | WS_GROUP, 0, 0, 10, 10, IDC_MODE_LAN);
-        g_ctx.hModeRelay = CreateCtrl(hWnd, L"button", L"房间码中继 (跨局域网)",
-                   BS_AUTORADIOBUTTON, 0, 0, 10, 10, IDC_MODE_RELAY);
-        // 默认选中局域网直连
-        SendMessageW(g_ctx.hModeLan, BM_SETCHECK, BST_CHECKED, 0);
+        // ===== 模式标签 (Owner-Draw Tab 按钮, 替代 RadioButton) =====
+        // GroupBox 已移除 (hModeGroup 保持 nullptr)
+        g_ctx.hModeGroup = nullptr;
+        g_ctx.hModeLan = CreateCtrl(hWnd, L"button", L"\u5c40\u57df\u7f51\u76f4\u8fde",
+                   BS_OWNERDRAW | BS_PUSHBUTTON, 0, 0, 10, 10, IDC_MODE_LAN);
+        g_ctx.hModeRelay = CreateCtrl(hWnd, L"button", L"\u623f\u95f4\u7801\u4e2d\u7ee7",
+                   BS_OWNERDRAW | BS_PUSHBUTTON, 0, 0, 10, 10, IDC_MODE_RELAY);
 
-        // ===== 局域网直连 - 发送区域 =====
-        g_ctx.hSendGroup = CreateCtrl(hWnd, L"button", L"发送文件 (自动发现接收端)",
-                   BS_GROUPBOX, 0, 0, 10, 10, 0);
-        g_ctx.hSendPortLbl = CreateCtrl(hWnd, L"static", L"端口:", SS_LEFT, 0, 0, 10, 10, 0);
-        g_ctx.hSendPortEdit = CreateCtrl(hWnd, L"edit", L"9090",
-                   ES_AUTOHSCROLL | WS_BORDER, 0, 0, 10, 10, IDC_SEND_PORT_EDIT);
-        g_ctx.hFileLbl = CreateCtrl(hWnd, L"static", L"文件路径:", SS_LEFT, 0, 0, 10, 10, 0);
-        g_ctx.hFileEdit = CreateCtrl(hWnd, L"edit", L"",
-                   ES_AUTOHSCROLL | WS_BORDER, 0, 0, 10, 10, IDC_FILE_EDIT);
-        g_ctx.hFileBrowse = CreateCtrl(hWnd, L"button", L"浏览...",
-                   BS_PUSHBUTTON, 0, 0, 10, 10, IDC_FILE_BROWSE);
-        g_ctx.hSendBtn = CreateCtrl(hWnd, L"button", L"发送",
-                   BS_PUSHBUTTON | BS_DEFPUSHBUTTON, 0, 0, 10, 10, IDC_SEND_BTN);
+        // ===== 局域网直连 - 发送区域 (GroupBox 已移除) =====
+        g_ctx.hSendGroup = nullptr;
+        g_ctx.hSendPortLbl = CreateCtrl(hWnd, L"static", L"\u7aef\u53e3", SS_LEFT, 0, 0, 10, 10, 0);
+        g_ctx.hSendPortEdit = CreateEditCentered(hWnd, nullptr, L"9090", 0, IDC_SEND_PORT_EDIT);
+        g_ctx.hFileLbl = CreateCtrl(hWnd, L"static", L"\u6587\u4ef6\u8def\u5f84", SS_LEFT, 0, 0, 10, 10, 0);
+        g_ctx.hFileEdit = CreateEditCentered(hWnd, L"\u9009\u62e9\u8981\u53d1\u9001\u7684\u6587\u4ef6", L"", 0, IDC_FILE_EDIT);
+        g_ctx.hFileBrowse = CreateCtrl(hWnd, L"button", L"\u6d4f\u89c8...",
+                   BS_OWNERDRAW, 0, 0, 10, 10, IDC_FILE_BROWSE);
+        g_ctx.hSendBtn = CreateCtrl(hWnd, L"button", L"\u2191 \u53d1\u9001",
+                   BS_OWNERDRAW, 0, 0, 10, 10, IDC_SEND_BTN);
 
         // ===== 局域网直连 - 接收区域 =====
-        g_ctx.hRecvGroup = CreateCtrl(hWnd, L"button", L"接收文件 (直连 - 服务端)",
-                   BS_GROUPBOX, 0, 0, 10, 10, 0);
-        g_ctx.hRecvPortLbl = CreateCtrl(hWnd, L"static", L"端口:", SS_LEFT, 0, 0, 10, 10, 0);
-        g_ctx.hRecvPortEdit = CreateCtrl(hWnd, L"edit", L"9090",
-                   ES_AUTOHSCROLL | WS_BORDER, 0, 0, 10, 10, IDC_RECV_PORT_EDIT);
-        g_ctx.hDirLbl = CreateCtrl(hWnd, L"static", L"保存目录:", SS_LEFT, 0, 0, 10, 10, 0);
-        g_ctx.hDirEdit = CreateCtrl(hWnd, L"edit", L"",
-                   ES_AUTOHSCROLL | WS_BORDER, 0, 0, 10, 10, IDC_DIR_EDIT);
-        g_ctx.hDirBrowse = CreateCtrl(hWnd, L"button", L"浏览...",
-                   BS_PUSHBUTTON, 0, 0, 10, 10, IDC_DIR_BROWSE);
-        g_ctx.hRecvBtn = CreateCtrl(hWnd, L"button", L"开始接收",
-                   BS_PUSHBUTTON | BS_DEFPUSHBUTTON, 0, 0, 10, 10, IDC_RECV_BTN);
+        g_ctx.hRecvGroup = nullptr;
+        g_ctx.hRecvPortLbl = CreateCtrl(hWnd, L"static", L"\u7aef\u53e3", SS_LEFT, 0, 0, 10, 10, 0);
+        g_ctx.hRecvPortEdit = CreateEditCentered(hWnd, nullptr, L"9090", 0, IDC_RECV_PORT_EDIT);
+        g_ctx.hDirLbl = CreateCtrl(hWnd, L"static", L"\u4fdd\u5b58\u76ee\u5f55", SS_LEFT, 0, 0, 10, 10, 0);
+        g_ctx.hDirEdit = CreateEditCentered(hWnd, L"\u7559\u7a7a\u5219\u4fdd\u5b58\u5230\u7a0b\u5e8f\u6240\u5728\u76ee\u5f55", L"", 0, IDC_DIR_EDIT);
+        g_ctx.hDirBrowse = CreateCtrl(hWnd, L"button", L"\u6d4f\u89c8...",
+                   BS_OWNERDRAW, 0, 0, 10, 10, IDC_DIR_BROWSE);
+        g_ctx.hRecvBtn = CreateCtrl(hWnd, L"button", L"\u2193 \u5f00\u59cb\u63a5\u6536",
+                   BS_OWNERDRAW, 0, 0, 10, 10, IDC_RECV_BTN);
 
         // ===== 中继 - 发送方 =====
-        g_ctx.hRSendGroup = CreateCtrl(hWnd, L"button", L"中继发送 (创建房间)",
-                   BS_GROUPBOX, 0, 0, 10, 10, 0);
-        g_ctx.hRSendFileLbl = CreateCtrl(hWnd, L"static", L"文件路径:", SS_LEFT, 0, 0, 10, 10, 0);
-        g_ctx.hRSendFileEdit = CreateCtrl(hWnd, L"edit", L"",
-                   ES_AUTOHSCROLL | WS_BORDER, 0, 0, 10, 10, IDC_RSEND_FILE_EDIT);
-        g_ctx.hRSendFileBrowse = CreateCtrl(hWnd, L"button", L"浏览...",
-                   BS_PUSHBUTTON, 0, 0, 10, 10, IDC_RSEND_FILE_BROWSE);
-        g_ctx.hRSendCodeLbl = CreateCtrl(hWnd, L"static", L"房间码:", SS_LEFT, 0, 0, 10, 10, 0);
-        g_ctx.hRSendCodeEdit = CreateCtrl(hWnd, L"edit", L"(创建后显示)",
-                   ES_AUTOHSCROLL | WS_BORDER | ES_READONLY, 0, 0, 10, 10, IDC_RSEND_CODE_EDIT);
-        g_ctx.hRSendBtn = CreateCtrl(hWnd, L"button", L"创建房间并发送",
-                   BS_PUSHBUTTON | BS_DEFPUSHBUTTON, 0, 0, 10, 10, IDC_RSEND_BTN);
-        g_ctx.hRSendAdvBtn = CreateCtrl(hWnd, L"button", L"高级设置",
-                   BS_PUSHBUTTON, 0, 0, 10, 10, IDC_RSEND_ADV_BTN);
+        g_ctx.hRSendGroup = nullptr;
+        g_ctx.hRSendFileLbl = CreateCtrl(hWnd, L"static", L"\u6587\u4ef6\u8def\u5f84", SS_LEFT, 0, 0, 10, 10, 0);
+        g_ctx.hRSendFileEdit = CreateEditCentered(hWnd, L"\u9009\u62e9\u8981\u53d1\u9001\u7684\u6587\u4ef6", L"", 0, IDC_RSEND_FILE_EDIT);
+        g_ctx.hRSendFileBrowse = CreateCtrl(hWnd, L"button", L"\u6d4f\u89c8...",
+                   BS_OWNERDRAW, 0, 0, 10, 10, IDC_RSEND_FILE_BROWSE);
+        g_ctx.hRSendCodeLbl = CreateCtrl(hWnd, L"static", L"\u623f\u95f4\u7801", SS_LEFT, 0, 0, 10, 10, 0);
+        g_ctx.hRSendCodeEdit = CreateEditCentered(hWnd, nullptr, L"(\u521b\u5efa\u540e\u663e\u793a)", ES_READONLY, IDC_RSEND_CODE_EDIT);
+        g_ctx.hRSendBtn = CreateCtrl(hWnd, L"button", L"\u521b\u5efa\u623f\u95f4\u5e76\u53d1\u9001",
+                   BS_OWNERDRAW, 0, 0, 10, 10, IDC_RSEND_BTN);
+        g_ctx.hRSendAdvBtn = CreateCtrl(hWnd, L"button", L"\u9ad8\u7ea7\u8bbe\u7f6e",
+                   BS_OWNERDRAW, 0, 0, 10, 10, IDC_RSEND_ADV_BTN);
 
         // ===== 中继 - 接收方 =====
-        g_ctx.hRRecvGroup = CreateCtrl(hWnd, L"button", L"中继接收 (输入房间码)",
-                   BS_GROUPBOX, 0, 0, 10, 10, 0);
-        g_ctx.hRRecvCodeLbl = CreateCtrl(hWnd, L"static", L"房间码:", SS_LEFT, 0, 0, 10, 10, 0);
-        g_ctx.hRRecvCodeEdit = CreateCtrl(hWnd, L"edit", L"",
-                   ES_AUTOHSCROLL | WS_BORDER | ES_CENTER, 0, 0, 10, 10, IDC_RRECV_CODE_EDIT);
-        g_ctx.hRRecvDirLbl = CreateCtrl(hWnd, L"static", L"保存目录:", SS_LEFT, 0, 0, 10, 10, 0);
-        g_ctx.hRRecvDirEdit = CreateCtrl(hWnd, L"edit", L"",
-                   ES_AUTOHSCROLL | WS_BORDER, 0, 0, 10, 10, IDC_RRECV_DIR_EDIT);
-        g_ctx.hRRecvDirBrowse = CreateCtrl(hWnd, L"button", L"浏览...",
-                   BS_PUSHBUTTON, 0, 0, 10, 10, IDC_RRECV_DIR_BROWSE);
-        g_ctx.hRRecvBtn = CreateCtrl(hWnd, L"button", L"加入房间并接收",
-                   BS_PUSHBUTTON | BS_DEFPUSHBUTTON, 0, 0, 10, 10, IDC_RRECV_BTN);
+        g_ctx.hRRecvGroup = nullptr;
+        g_ctx.hRRecvCodeLbl = CreateCtrl(hWnd, L"static", L"\u623f\u95f4\u7801", SS_LEFT, 0, 0, 10, 10, 0);
+        g_ctx.hRRecvCodeEdit = CreateEditCentered(hWnd, L"6 \u4f4d\u5b57\u6bcd\u6570\u5b57", L"", 0, IDC_RRECV_CODE_EDIT);
+        g_ctx.hRRecvDirLbl = CreateCtrl(hWnd, L"static", L"\u4fdd\u5b58\u76ee\u5f55", SS_LEFT, 0, 0, 10, 10, 0);
+        g_ctx.hRRecvDirEdit = CreateEditCentered(hWnd, L"\u7559\u7a7a\u5219\u4fdd\u5b58\u5230\u7a0b\u5e8f\u6240\u5728\u76ee\u5f55", L"", 0, IDC_RRECV_DIR_EDIT);
+        g_ctx.hRRecvDirBrowse = CreateCtrl(hWnd, L"button", L"\u6d4f\u89c8...",
+                   BS_OWNERDRAW, 0, 0, 10, 10, IDC_RRECV_DIR_BROWSE);
+        g_ctx.hRRecvBtn = CreateCtrl(hWnd, L"button", L"\u52a0\u5165\u623f\u95f4\u5e76\u63a5\u6536",
+                   BS_OWNERDRAW, 0, 0, 10, 10, IDC_RRECV_BTN);
 
-        // ===== 中继发送二维码显示区 (默认隐藏, 收到房间码后显示) =====
-        // 初始 SS_CENTER 显示文字提示, 生成二维码后切换为 SS_BITMAP
+        // ===== 中继发送二维码显示区 =====
         g_ctx.hQrImage = CreateCtrl(hWnd, L"static",
-                   L"扫码自动接收",
+                   L"\u626b\u7801\u81ea\u52a8\u63a5\u6536",
                    SS_CENTER | WS_BORDER, 0, 0, 10, 10, 0);
-        SendMessageW(g_ctx.hQrImage, WM_SETFONT, (WPARAM)g_ctx.hFont, TRUE);
+        SendMessageW(g_ctx.hQrImage, WM_SETFONT, (WPARAM)g_ctx.hFontSmall, TRUE);
         g_ctx.hQrCodeLbl2 = CreateCtrl(hWnd, L"static",
-                   L"扫码后手机将自动连接本电脑接收文件",
-                   SS_CENTER, 0, 0, 10, 10, 0);
+                   L"\u626b\u7801\u540e\u624b\u673a\u5c06\u81ea\u52a8\u8fde\u63a5\u672c\u7535\u8111\u63a5\u6536\u6587\u4ef6",
+                   SS_LEFT, 0, 0, 10, 10, 0);
+        SendMessageW(g_ctx.hQrCodeLbl2, WM_SETFONT, (WPARAM)g_ctx.hFontSmall, TRUE);
 
         // ===== 进度 + 取消 =====
-        g_ctx.hProgress = CreateCtrl(hWnd, PROGRESS_CLASSW, L"",
-                   PBS_SMOOTH, 0, 0, 10, 10, IDC_PROGRESS);
-        SendMessageW(g_ctx.hProgress, PBM_SETRANGE32, 0, 100);
-        g_ctx.hCancelBtn = CreateCtrl(hWnd, L"button", L"取消传输",
-                   BS_PUSHBUTTON, 0, 0, 10, 10, IDC_CANCEL_BTN);
+        // 进度条为自绘长条胶囊 (WM_PAINT 中绘制), 无需创建标准控件
+        g_ctx.hCancelBtn = CreateCtrl(hWnd, L"button", L"\u53d6\u6d88",
+                   BS_OWNERDRAW, 0, 0, 10, 10, IDC_CANCEL_BTN);
         EnableWindow(g_ctx.hCancelBtn, FALSE);
 
         // ===== 日志 =====
-        g_ctx.hLogLbl = CreateCtrl(hWnd, L"static", L"状态日志:", SS_LEFT, 0, 0, 10, 10, 0);
+        g_ctx.hLogLbl = CreateCtrl(hWnd, L"static", L"\u72b6\u6001\u65e5\u5fd7", SS_LEFT, 0, 0, 10, 10, 0);
         g_ctx.hLog = CreateCtrl(hWnd, L"edit", L"",
                    ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY |
                    WS_VSCROLL | WS_BORDER, 0, 0, 10, 10, IDC_LOG);
 
-        // 占位提示
-        SendMessageW(g_ctx.hFileEdit, EM_SETCUEBANNER, TRUE, (LPARAM)L"选择要发送的文件");
-        SendMessageW(g_ctx.hDirEdit, EM_SETCUEBANNER, TRUE, (LPARAM)L"留空则保存到程序所在目录");
-        SendMessageW(g_ctx.hRSendFileEdit, EM_SETCUEBANNER, TRUE, (LPARAM)L"选择要发送的文件");
-        SendMessageW(g_ctx.hRRecvCodeEdit, EM_SETCUEBANNER, TRUE, (LPARAM)L"6 位字母数字");
-        SendMessageW(g_ctx.hRRecvDirEdit, EM_SETCUEBANNER, TRUE, (LPARAM)L"留空则保存到程序所在目录");
+        // 为标签设置小号字体 (CreateCtrl 默认用 hFont, 此处覆盖)
+        auto SetSmallFont = [](HWND h) {
+            if (h && g_ctx.hFontSmall) SendMessageW(h, WM_SETFONT, (WPARAM)g_ctx.hFontSmall, TRUE);
+        };
+        SetSmallFont(g_ctx.hSendPortLbl);  SetSmallFont(g_ctx.hFileLbl);
+        SetSmallFont(g_ctx.hRecvPortLbl);  SetSmallFont(g_ctx.hDirLbl);
+        SetSmallFont(g_ctx.hRSendFileLbl); SetSmallFont(g_ctx.hRSendCodeLbl);
+        SetSmallFont(g_ctx.hRRecvCodeLbl); SetSmallFont(g_ctx.hRRecvDirLbl);
+
+        // 为编辑框设置正文字体 (与正文一致, 不再用按钮字体)
+        auto SetEditFont = [](HWND h) {
+            if (h && g_ctx.hFont) SendMessageW(h, WM_SETFONT, (WPARAM)g_ctx.hFont, TRUE);
+        };
+        SetEditFont(g_ctx.hSendPortEdit); SetEditFont(g_ctx.hFileEdit);
+        SetEditFont(g_ctx.hRecvPortEdit); SetEditFont(g_ctx.hDirEdit);
+        SetEditFont(g_ctx.hRSendFileEdit); SetEditFont(g_ctx.hRSendCodeEdit);
+        SetEditFont(g_ctx.hRRecvCodeEdit); SetEditFont(g_ctx.hRRecvDirEdit);
+        SetEditFont(g_ctx.hLog);
+
+        // 让输入框文字垂直居中 (格式化矩形收窄为一行并垂直居中)
+        CenterEditTextVertically(g_ctx.hSendPortEdit);
+        CenterEditTextVertically(g_ctx.hFileEdit);
+        CenterEditTextVertically(g_ctx.hRecvPortEdit);
+        CenterEditTextVertically(g_ctx.hDirEdit);
+        CenterEditTextVertically(g_ctx.hRSendFileEdit);
+        CenterEditTextVertically(g_ctx.hRSendCodeEdit);
+        CenterEditTextVertically(g_ctx.hRRecvCodeEdit);
+        CenterEditTextVertically(g_ctx.hRRecvDirEdit);
+
+        // 悬停状态追踪定时器 (50ms 间隔, 用于 owner-draw 按钮 hover 效果)
+        SetTimer(hWnd, 1, 50, nullptr);
 
         // 初始模式可见性
         ApplyModeVisibility();
 
-        AppendLog(L"就绪。请选择传输模式 (局域网直连 / 房间码中继)。\r\n");
-        AppendLog(L"提示: 房间码中继模式需先在公网 VPS 上运行 SilexRelay.exe\r\n");
-        AppendLog(L"提示: 中继发送时会在旁边显示二维码, 手机扫码可自动加入房间\r\n");
+        AppendLog(L"\u5c31\u7eea\u3002\u8bf7\u9009\u62e9\u4f20\u8f93\u6a21\u5f0f (\u5c40\u57df\u7f51\u76f4\u8fde / \u623f\u95f4\u7801\u4e2d\u7ee7)\u3002\r\n");
+        AppendLog(L"\u63d0\u793a: \u623f\u95f4\u7801\u4e2d\u7ee7\u6a21\u5f0f\u9700\u5148\u5728\u516c\u7f51 VPS \u4e0a\u8fd0\u884c SilexRelay.exe\r\n");
+        AppendLog(L"\u63d0\u793a: \u4e2d\u7ee7\u53d1\u9001\u65f6\u4f1a\u5728\u65c1\u8fb9\u663e\u793a\u4e8c\u7ef4\u7801, \u624b\u673a\u626b\u7801\u53ef\u81ea\u52a8\u52a0\u5165\u623f\u95f4\r\n");
         return 0;
     }
 
     case WM_SIZE:
         DoLayout(LOWORD(lParam), HIWORD(lParam));
+        InvalidateRect(hWnd, nullptr, FALSE);
         return 0;
+
+    case WM_NCCALCSIZE: {
+        // 移除非客户区, 使客户区覆盖整个窗口
+        if (wParam) {
+            // wParam == TRUE: lParam 是 NCCALCSIZE_PARAMS*
+            // 返回 0 表示接受系统提议的客户区
+            return 0;
+        }
+        // wParam == FALSE: lParam 是 RECT*, 返回 0 接受
+        return 0;
+    }
+
+    case WM_NCPAINT:
+        // 阻止系统绘制非客户区边框
+        return 0;
+
+    case WM_NCACTIVATE:
+        // 阻止系统绘制非激活边框
+        return TRUE;
+
+    case WM_GETMINMAXINFO: {
+        auto* mmi = (MINMAXINFO*)lParam;
+        mmi->ptMinTrackSize.x = Dpi(MIN_W);
+        mmi->ptMinTrackSize.y = Dpi(MIN_H);
+        return 0;
+    }
+
+    case WM_NCHITTEST: {
+        // 检查鼠标是否在交通灯按钮上
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        POINT ptClient = pt;
+        ScreenToClient(hWnd, &ptClient);
+
+        if (PtInRect(&g_ctx.rcBtnMin, ptClient)) return HTCLIENT;
+        if (PtInRect(&g_ctx.rcBtnMax, ptClient)) return HTCLIENT;
+        if (PtInRect(&g_ctx.rcBtnCls, ptClient)) return HTCLIENT;
+
+        // 标题栏区域 (可拖动)
+        RECT rcTitle = { 0, 0, g_ctx.rcTabBar.right, Dpi(TITLE_BAR_H) };
+        if (PtInRect(&rcTitle, ptClient)) return HTCAPTION;
+
+        // 窗口边缘 (可调整大小)
+        RECT rc;
+        GetWindowRect(hWnd, &rc);
+        int x = pt.x - rc.left;
+        int y = pt.y - rc.top;
+        int w = rc.right - rc.left;
+        int h = rc.bottom - rc.top;
+        int bw = 8;  // 边缘宽度
+        if (x < bw && y < bw)   return HTTOPLEFT;
+        if (x > w-bw && y < bw) return HTTOPRIGHT;
+        if (x < bw && y > h-bw) return HTBOTTOMLEFT;
+        if (x > w-bw && y > h-bw) return HTBOTTOMRIGHT;
+        if (x < bw) return HTLEFT;
+        if (x > w-bw) return HTRIGHT;
+        if (y < bw) return HTTOP;
+        if (y > h-bw) return HTBOTTOM;
+
+        return DefWindowProcW(hWnd, msg, wParam, lParam);
+    }
+
+    case WM_LBUTTONDOWN: {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        if (PtInRect(&g_ctx.rcBtnMin, pt)) {
+            ShowWindow(hWnd, SW_MINIMIZE);
+            return 0;
+        }
+        if (PtInRect(&g_ctx.rcBtnMax, pt)) {
+            if (g_ctx.maximized) {
+                // 还原
+                SetWindowPos(hWnd, nullptr, g_ctx.rcRestore.left, g_ctx.rcRestore.top,
+                    g_ctx.rcRestore.right - g_ctx.rcRestore.left,
+                    g_ctx.rcRestore.bottom - g_ctx.rcRestore.top,
+                    SWP_NOZORDER);
+                g_ctx.maximized = false;
+                // 重新应用 DWM 圆角
+                DWM_WINDOW_CORNER_PREFERENCE pref = DWMWCP_ROUND;
+                DwmSetWindowAttribute(hWnd, DWMWA_WINDOW_CORNER_PREFERENCE, &pref, sizeof(pref));
+            } else {
+                // 最大化
+                RECT rcWnd;
+                GetWindowRect(hWnd, &rcWnd);
+                g_ctx.rcRestore = rcWnd;
+                // 获取显示器工作区
+                HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+                MONITORINFO mi = { sizeof(mi) };
+                GetMonitorInfoW(hMon, &mi);
+                SetWindowPos(hWnd, nullptr,
+                    mi.rcWork.left, mi.rcWork.top,
+                    mi.rcWork.right - mi.rcWork.left,
+                    mi.rcWork.bottom - mi.rcWork.top,
+                    SWP_NOZORDER);
+                g_ctx.maximized = true;
+                // 最大化时移除圆角
+                DWM_WINDOW_CORNER_PREFERENCE pref = DWMWCP_DONOTROUND;
+                DwmSetWindowAttribute(hWnd, DWMWA_WINDOW_CORNER_PREFERENCE, &pref, sizeof(pref));
+            }
+            return 0;
+        }
+        if (PtInRect(&g_ctx.rcBtnCls, pt)) {
+            PostMessageW(hWnd, WM_CLOSE, 0, 0);
+            return 0;
+        }
+        return DefWindowProcW(hWnd, msg, wParam, lParam);
+    }
+
+    case WM_ERASEBKGND:
+        return DefWindowProcW(hWnd, msg, wParam, lParam);
+
+    case WM_PAINT:
+        PaintMainWindow(hWnd);
+        return 0;
+
+    case WM_DRAWITEM: {
+        auto* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+        DrawODButton(dis);
+        return TRUE;
+    }
+
+    case WM_TIMER:
+        if (wParam == 1) UpdateHoverStates();
+        return 0;
+
+    case WM_CTLCOLORBTN: {
+        HDC hdc = (HDC)wParam;
+        SetBkMode(hdc, TRANSPARENT);
+        int id = GetDlgCtrlID((HWND)lParam);
+        // Tab 按钮背景匹配标签栏灰色, 其他按钮匹配卡片白色
+        if (id == IDC_MODE_LAN || id == IDC_MODE_RELAY) {
+            static HBRUSH hTabBg = CreateSolidBrush(RGB(232,236,248));
+            return (INT_PTR)hTabBg;
+        }
+        static HBRUSH hBtnBg = CreateSolidBrush(RGB(255,255,255));
+        return (INT_PTR)hBtnBg;
+    }
+
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLOREDIT: {
+        HDC hdc = (HDC)wParam;
+        SetBkMode(hdc, TRANSPARENT);
+        if (msg == WM_CTLCOLOREDIT) {
+            SetTextColor(hdc, RGB(51,65,85));
+            // 编辑框: 浅灰背景
+            static HBRUSH hEditBg = CreateSolidBrush(RGB(248,250,252));
+            return (INT_PTR)hEditBg;
+        }
+        // 静态控件: 白色背景
+        SetTextColor(hdc, RGB(71,85,105));
+        static HBRUSH hCardBg = CreateSolidBrush(RGB(255,255,255));
+        return (INT_PTR)hCardBg;
+    }
 
     case WM_SYSCOMMAND:
         // 最小化时隐藏到托盘而非任务栏
@@ -1694,13 +2707,6 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         return 0;
     }
 
-    case WM_GETMINMAXINFO: {
-        auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
-        mmi->ptMinTrackSize.x = MIN_W;
-        mmi->ptMinTrackSize.y = MIN_H;
-        return 0;
-    }
-
     case WM_COMMAND: {
         int id = LOWORD(wParam);
         switch (id) {
@@ -1721,9 +2727,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         case IDC_RSEND_ADV_BTN: {
             if (ShowAdvRelayDialog(hWnd)) {
                 if (g_ctx.use_custom_relay) {
-                    AppendLog(L"[高级设置] 已切换到自定义中继服务器: " +
-                              utf8_to_wide(g_ctx.custom_relay_host) + L":" +
-                              std::to_wstring(g_ctx.custom_relay_port) + L"\r\n");
+                    AppendLog(L"[高级设置] 已切换到自定义中继服务器\r\n");
                 } else {
                     AppendLog(L"[高级设置] 已恢复使用默认中继服务器\r\n");
                 }
@@ -1743,7 +2747,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             g_ctx.busy = true; g_ctx.cancel = false;
             SetTransferControls(FALSE);
-            SendMessageW(g_ctx.hProgress, PBM_SETPOS, 0, 0);
+            ResetProgressUI();
             SetWindowTextW(g_ctx.hLog, L"");
             AppendLog(L"========== 发送文件 (局域网自动发现) ==========\r\n");
             // ip 传空字符串, 工作线程会自动发现
@@ -1761,7 +2765,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             g_ctx.busy = true; g_ctx.cancel = false;
             SetTransferControls(FALSE);
-            SendMessageW(g_ctx.hProgress, PBM_SETPOS, 0, 0);
+            ResetProgressUI();
             SetWindowTextW(g_ctx.hLog, L"");
             AppendLog(L"========== 接收文件 (局域网直连) ==========\r\n");
             // 显示本机所有可用 IP
@@ -1795,7 +2799,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             g_ctx.busy = true; g_ctx.cancel = false;
             SetTransferControls(FALSE);
-            SendMessageW(g_ctx.hProgress, PBM_SETPOS, 0, 0);
+            ResetProgressUI();
             SetWindowTextW(g_ctx.hLog, L"");
             SetWindowTextW(g_ctx.hRSendCodeEdit, L"创建中...");
             AppendLog(L"========== 中继发送 (创建房间) ==========\r\n");
@@ -1829,7 +2833,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             g_ctx.busy = true; g_ctx.cancel = false;
             SetTransferControls(FALSE);
-            SendMessageW(g_ctx.hProgress, PBM_SETPOS, 0, 0);
+            ResetProgressUI();
             SetWindowTextW(g_ctx.hLog, L"");
             AppendLog(L"========== 中继接收 (加入房间) ==========\r\n");
             g_ctx.worker = std::thread(TransferThread_RelayRecv,
@@ -1851,8 +2855,13 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         auto* pm = reinterpret_cast<ProgressMsg*>(lParam);
         if (pm) {
             if (pm->total > 0) {
-                int pct = (int)(100 * pm->done / pm->total);
-                SendMessageW(g_ctx.hProgress, PBM_SETPOS, pct, 0);
+                // 保存进度状态, 由自绘进度条显示
+                g_ctx.prog_total = pm->total;
+                g_ctx.prog_done = pm->done;
+                g_ctx.prog_pct = (int)(100 * pm->done / pm->total);
+                if (g_ctx.prog_pct > 100) g_ctx.prog_pct = 100;
+                g_ctx.prog_active = true;
+                InvalidateRect(hWnd, &g_ctx.rcProgress, FALSE);
             }
             if (!pm->text.empty()) AppendLog(utf8_to_wide(pm->text) + L"\r\n");
             delete pm;
@@ -1873,29 +2882,26 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
 
     case WM_APP_QR_UPDATE: {
-        // QR 模式: 收到房间码后, 生成并显示二维码
         auto* qr_data = reinterpret_cast<std::string*>(lParam);
         if (qr_data) {
-            // 生成二维码位图
+            g_ctx.qr_data = *qr_data;
             if (g_ctx.qr_bitmap) { DeleteObject(g_ctx.qr_bitmap); g_ctx.qr_bitmap = nullptr; }
-            g_ctx.qr_bitmap = GenerateQrBitmap(*qr_data, 6, g_ctx.qr_bitmap_size);
+            g_ctx.qr_bitmap = GenerateQrBitmap(g_ctx.qr_data, 6, g_ctx.qr_bitmap_size);
             if (g_ctx.qr_bitmap) {
                 SetWindowTextW(g_ctx.hQrImage, L"");
                 LONG_PTR style = GetWindowLongPtrW(g_ctx.hQrImage, GWL_STYLE);
                 style = (style & ~SS_TYPEMASK) | SS_BITMAP;
                 SetWindowLongPtrW(g_ctx.hQrImage, GWL_STYLE, style);
-                InvalidateRect(g_ctx.hQrImage, nullptr, TRUE);
                 SendMessageW(g_ctx.hQrImage, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)g_ctx.qr_bitmap);
-
-                // 提示文字
-                std::wstring hint = L"扫码自动接收 (房间码已编码到二维码)";
-                SetWindowTextW(g_ctx.hQrCodeLbl2, hint.c_str());
                 ShowWindow(g_ctx.hQrImage, SW_SHOW);
-                ShowWindow(g_ctx.hQrCodeLbl2, SW_SHOW);
                 RECT rc;
                 GetClientRect(g_ctx.hwnd, &rc);
                 DoLayout(rc.right, rc.bottom);
+                InvalidateRect(g_ctx.hwnd, &g_ctx.rcCard1, FALSE);
             }
+            std::wstring hint = L"扫码自动接收 (房间码已编码到二维码)";
+            SetWindowTextW(g_ctx.hQrCodeLbl2, hint.c_str());
+            ShowWindow(g_ctx.hQrCodeLbl2, SW_SHOW);
             delete qr_data;
         }
         return 0;
@@ -1903,41 +2909,37 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 
     case WM_APP_DONE: {
         if (g_ctx.worker.joinable()) g_ctx.worker.join();
+        // 复位忙碌标志, 允许再次发起传输 (否则按钮点击会被 busy 拦截)
+        g_ctx.busy = false;
+        g_ctx.cancel = false;
         // 停止接收端的 UDP 发现响应线程
         if (g_ctx.discovery_worker.joinable()) {
             g_ctx.discovery_running = false;
             g_ctx.discovery_worker.join();
         }
-        // 清理内嵌二维码显示 (隐藏图片框 + 提示, 不再显示默认文字)
+        // 清理内嵌二维码显示
         if (g_ctx.qr_bitmap) {
             DeleteObject(g_ctx.qr_bitmap);
             g_ctx.qr_bitmap = nullptr;
         }
+        g_ctx.qr_data.clear();
+        // 重置 QR 图片控件为初始提示文本
         SendMessageW(g_ctx.hQrImage, STM_SETIMAGE, IMAGE_BITMAP, 0);
-        // 切回 SS_CENTER 样式, 下次显示文字时可正常使用
-        LONG_PTR style_qr = GetWindowLongPtrW(g_ctx.hQrImage, GWL_STYLE);
-        style_qr = (style_qr & ~SS_TYPEMASK) | SS_CENTER;
-        SetWindowLongPtrW(g_ctx.hQrImage, GWL_STYLE, style_qr);
-        InvalidateRect(g_ctx.hQrImage, nullptr, TRUE);
+        LONG_PTR style = GetWindowLongPtrW(g_ctx.hQrImage, GWL_STYLE);
+        style = (style & ~SS_TYPEMASK) | SS_CENTER;
+        SetWindowLongPtrW(g_ctx.hQrImage, GWL_STYLE, style);
         SetWindowTextW(g_ctx.hQrImage, L"扫码自动接收");
         SetWindowTextW(g_ctx.hQrCodeLbl2, L"扫码后手机将自动连接本电脑接收文件");
-        // 隐藏二维码框 + 提示
-        ShowWindow(g_ctx.hQrImage, SW_HIDE);
-        ShowWindow(g_ctx.hQrCodeLbl2, SW_HIDE);
-        // 触发重布局以刷新 (隐藏后不再占位)
-        {
-            RECT rc;
-            GetClientRect(g_ctx.hwnd, &rc);
-            DoLayout(rc.right, rc.bottom);
-        }
-        g_ctx.qr_data.clear();
+        SetWindowTextW(g_ctx.hRSendCodeEdit, L"（创建后显示）");
+        ShowWindow(g_ctx.hQrImage, SW_SHOW);
+        ShowWindow(g_ctx.hQrCodeLbl2, SW_SHOW);
         g_ctx.qr_listen_port = 0;
-
-        g_ctx.busy = false;
         SetTransferControls(TRUE);
         int ret = (int)wParam;
         if (ret == 0) {
-            SendMessageW(g_ctx.hProgress, PBM_SETPOS, 100, 0);
+            g_ctx.prog_pct = 100;
+            g_ctx.prog_done = g_ctx.prog_total;
+            InvalidateRect(hWnd, &g_ctx.rcProgress, FALSE);
             AppendLog(L"\r\n[完成] 传输成功!\r\n");
             MessageBoxW(hWnd, L"传输完成!", L"成功", MB_OK | MB_ICONINFORMATION);
         } else if (ret == ft::CANCELED) {
@@ -1949,8 +2951,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
         // 清理传输相关的 UI 内容 (房间码、文件路径、进度条)
         // 让用户可以立即开始新的传输
-        SendMessageW(g_ctx.hProgress, PBM_SETPOS, 0, 0);
-        SetWindowTextW(g_ctx.hRSendCodeEdit, L"（创建后显示）");
+        ResetProgressUI();
         SetWindowTextW(g_ctx.hRRecvCodeEdit, L"6位字母数字");
         SetWindowTextW(g_ctx.hRSendFileEdit, L"选择要发送的文件");
         SetWindowTextW(g_ctx.hFileEdit, L"选择要发送的文件");
@@ -2011,12 +3012,18 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
 
     case WM_DESTROY:
+        KillTimer(hWnd, 1);
         if (g_ctx.qr_bitmap) {
             DeleteObject(g_ctx.qr_bitmap);
             g_ctx.qr_bitmap = nullptr;
         }
         TrayDelete();
         if (g_ctx.hFont) DeleteObject(g_ctx.hFont);
+        if (g_ctx.hFontTitle) DeleteObject(g_ctx.hFontTitle);
+        if (g_ctx.hFontCard) DeleteObject(g_ctx.hFontCard);
+        if (g_ctx.hFontSmall) DeleteObject(g_ctx.hFontSmall);
+        if (g_ctx.hFontBtn) DeleteObject(g_ctx.hFontBtn);
+        if (g_ctx.hFontTab) DeleteObject(g_ctx.hFontTab);
         PostQuitMessage(0);
         return 0;
     }
@@ -2038,7 +3045,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     }
 
     // 启用 DPI 感知, 避免高 DPI 屏幕上控件错位/遮挡
-    SetProcessDPIAware();
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     // 保存实例句柄 + 加载关闭行为偏好
     g_ctx.hInst = hInstance;
@@ -2065,16 +3072,25 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     wc.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(1));
     RegisterClassExW(&wc);
 
-    // 计算窗口大小 (客户区 760x860, 可调整)
-    RECT rc = {0, 0, 760, 860};
-    AdjustWindowRectEx(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0);
+    // 自定义窗口样式: 无边框 + 可调整大小 + 最小化/最大化
+    DWORD winStyle = WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_CLIPCHILDREN;
+
+    // 计算窗口大小 (客户区 900x860)
+    RECT rc = {0, 0, 900, 860};
 
     g_ctx.hwnd = CreateWindowExW(
-        0, cls_name, L"臻传 Silex v0.0.9 - 文件传输 (局域网/中继)",
-        WS_OVERLAPPEDWINDOW,  // 完整窗口样式: 可调整大小、可最大化
+        0, cls_name, L"Silex",
+        winStyle,
         CW_USEDEFAULT, CW_USEDEFAULT,
         rc.right - rc.left, rc.bottom - rc.top,
         nullptr, nullptr, hInstance, nullptr);
+
+    // DWM 圆角窗口 (Windows 10 1803+)
+    DWM_WINDOW_CORNER_PREFERENCE pref = DWMWCP_ROUND;
+    DwmSetWindowAttribute(g_ctx.hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &pref, sizeof(pref));
+    // 启用暗色标题栏, 使自定义标题栏与系统融合
+    BOOL darkTitle = TRUE;
+    DwmSetWindowAttribute(g_ctx.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &darkTitle, sizeof(darkTitle));
 
     ShowWindow(g_ctx.hwnd, nCmdShow);
     UpdateWindow(g_ctx.hwnd);

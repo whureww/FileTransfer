@@ -12,7 +12,7 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 20) {
-                Text("臻传 Silex v0.0.9")
+                Text("臻传 Silex v0.1.0")
                     .font(.title2)
                     .fontWeight(.bold)
 

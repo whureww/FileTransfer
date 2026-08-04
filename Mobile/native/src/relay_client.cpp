@@ -77,11 +77,11 @@ int relay_send_file(const std::string& relay_host, unsigned short relay_port,
     addr.sin_family = AF_INET;
     addr.sin_port = ::htons(relay_port);
     if (::inet_pton(AF_INET, relay_host.c_str(), &addr.sin_addr) <= 0) {
-        report(cb, 0, 0, "[错误] 无效的中继服务器地址: " + relay_host);
+        report(cb, 0, 0, "[错误] 无效的中继服务器地址");
         close_socket(sock);
         return ERR_CONNECT;
     }
-    if (!report(cb, 0, 0, "[信息] 正在连接中继服务器 " + relay_host + ":" + std::to_string(relay_port) + " ...")) {
+    if (!report(cb, 0, 0, "[信息] 正在连接中继服务器...")) {
         close_socket(sock);
         return CANCELED;
     }
@@ -267,11 +267,11 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
     addr.sin_family = AF_INET;
     addr.sin_port = ::htons(relay_port);
     if (::inet_pton(AF_INET, relay_host.c_str(), &addr.sin_addr) <= 0) {
-        report(cb, 0, 0, "[错误] 无效的中继服务器地址: " + relay_host);
+        report(cb, 0, 0, "[错误] 无效的中继服务器地址");
         close_socket(sock);
         return ERR_CONNECT;
     }
-    if (!report(cb, 0, 0, "[信息] 正在连接中继服务器 " + relay_host + ":" + std::to_string(relay_port) + " ...")) {
+    if (!report(cb, 0, 0, "[信息] 正在连接中继服务器...")) {
         close_socket(sock);
         return CANCELED;
     }

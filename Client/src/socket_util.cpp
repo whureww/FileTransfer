@@ -1,4 +1,13 @@
 // socket_util.cpp - 跨平台 socket/IO 辅助函数实现
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <shlobj.h>
+#include <knownfolders.h>
+#endif
+
 #include "socket_util.h"
 
 #include <algorithm>
@@ -215,6 +224,36 @@ std::string unique_filepath(const std::string& dir, const std::string& filename)
     }
     return base.string();
 #endif
+}
+
+// 获取备用保存目录: [exe 所在目录, 系统临时目录, 桌面]
+// 用于主保存目录不可写时自动回退
+std::vector<std::string> get_fallback_dirs() {
+    std::vector<std::string> dirs;
+#ifdef _WIN32
+    // exe 所在目录
+    wchar_t exe_path[MAX_PATH] = {0};
+    DWORD n = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
+    if (n > 0 && n < MAX_PATH) {
+        std::wstring ws(exe_path);
+        std::size_t pos = ws.find_last_of(L"\\/");
+        if (pos != std::wstring::npos) ws.resize(pos);
+        if (!ws.empty()) dirs.push_back(wpath_to_utf8(ws));
+    }
+    // 系统临时目录
+    wchar_t tmp[MAX_PATH] = {0};
+    DWORD tn = GetTempPathW(MAX_PATH, tmp);
+    if (tn > 0 && tn < MAX_PATH) dirs.push_back(wpath_to_utf8(std::wstring(tmp)));
+    // 桌面
+    PWSTR desk = nullptr;
+    if (SHGetKnownFolderPath(FOLDERID_Desktop, 0, nullptr, &desk) == S_OK && desk) {
+        dirs.push_back(wpath_to_utf8(desk));
+        CoTaskMemFree(desk);
+    }
+#else
+    dirs.push_back("/tmp");
+#endif
+    return dirs;
 }
 
 } // namespace detail

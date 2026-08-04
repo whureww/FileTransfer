@@ -1,7 +1,9 @@
 #include "file_transfer.h"
 #include "socket_util.h"
+#include "secret.h"   // get_local_ipv4_addresses (子网定向广播)
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -350,10 +352,31 @@ int recv_file(unsigned short port, const std::string& output_dir,
     std::ofstream out(out_path, std::ios::binary | std::ios::trunc);
 #endif
     if (!out.is_open()) {
-        report(cb, 0, 0, "[错误] 无法创建输出文件: " + out_path);
-        close_socket(conn);
-        close_socket(listen_sock);
-        return ERR_CREATE_FILE;
+        // 保存目录不可写: 自动回退到 exe 目录 / 临时目录 / 桌面
+        std::string fallback_path;
+        for (const auto& d : detail::get_fallback_dirs()) {
+            if (d.empty()) continue;
+            std::string p = detail::unique_filepath(d, safe_name);
+#ifdef _WIN32
+            std::ofstream f(detail::utf8_to_wpath(p), std::ios::binary | std::ios::trunc);
+#else
+            std::ofstream f(p, std::ios::binary | std::ios::trunc);
+#endif
+            if (f.is_open()) {
+                out = std::move(f);
+                fallback_path = p;
+                break;
+            }
+        }
+        if (fallback_path.empty()) {
+            report(cb, 0, 0, "[错误] 无法创建输出文件: " + out_path +
+                   " (errno=" + std::to_string(errno) + ")");
+            close_socket(conn);
+            close_socket(listen_sock);
+            return ERR_CREATE_FILE;
+        }
+        report(cb, 0, 0, "[警告] 保存目录不可写, 已自动改存到: " + fallback_path);
+        out_path = fallback_path;
     }
 
     // 使用二进制帧协议读取数据 (支持取消通知)
@@ -665,9 +688,30 @@ int connect_recv(const std::string& ip, unsigned short port,
     std::ofstream out(out_path, std::ios::binary);
 #endif
     if (!out.is_open()) {
-        report(cb, 0, 0, "[错误] 无法创建输出文件: " + out_path);
-        close_socket(sock);
-        return ERR_CREATE_FILE;
+        // 保存目录不可写: 自动回退到 exe 目录 / 临时目录 / 桌面
+        std::string fallback_path;
+        for (const auto& d : detail::get_fallback_dirs()) {
+            if (d.empty()) continue;
+            std::string p = detail::unique_filepath(d, safe_name);
+#ifdef _WIN32
+            std::ofstream f(detail::utf8_to_wpath(p), std::ios::binary);
+#else
+            std::ofstream f(p, std::ios::binary);
+#endif
+            if (f.is_open()) {
+                out = std::move(f);
+                fallback_path = p;
+                break;
+            }
+        }
+        if (fallback_path.empty()) {
+            report(cb, 0, 0, "[错误] 无法创建输出文件: " + out_path +
+                   " (errno=" + std::to_string(errno) + ")");
+            close_socket(sock);
+            return ERR_CREATE_FILE;
+        }
+        report(cb, 0, 0, "[警告] 保存目录不可写, 已自动改存到: " + fallback_path);
+        out_path = fallback_path;
     }
 
     // 读取文件数据
@@ -761,7 +805,7 @@ discover_peers(unsigned short tcp_port, int timeout_ms) {
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #endif
 
-    // 发送广播发现包
+    // 发送广播发现包: 同时发全局广播和 /24 子网定向广播 (兼容更多路由器)
     sockaddr_in bcast_addr{};
     bcast_addr.sin_family = AF_INET;
     bcast_addr.sin_addr.s_addr = INADDR_BROADCAST;
@@ -769,6 +813,21 @@ discover_peers(unsigned short tcp_port, int timeout_ms) {
     const char* msg = "FT_DISCOVER\n";
     ::sendto(sock, msg, static_cast<int>(std::strlen(msg)), 0,
              reinterpret_cast<sockaddr*>(&bcast_addr), sizeof(bcast_addr));
+
+    // 子网定向广播: 对每个本机 IPv4 地址, 将最后一段置为 255 (假设 /24)
+    // 部分路由器/AP 隔离环境不转发 255.255.255.255 全局广播, 定向广播更可靠
+    auto local_ips = get_local_ipv4_addresses();
+    for (const auto& ip : local_ips) {
+        sockaddr_in sub{};
+        sub.sin_family = AF_INET;
+        sub.sin_port = htons(DISCOVERY_PORT);
+        if (::inet_pton(AF_INET, ip.c_str(), &sub.sin_addr) == 1) {
+            unsigned char* p = reinterpret_cast<unsigned char*>(&sub.sin_addr);
+            p[3] = 255;   // /24 子网定向广播地址
+            ::sendto(sock, msg, static_cast<int>(std::strlen(msg)), 0,
+                     reinterpret_cast<sockaddr*>(&sub), sizeof(sub));
+        }
+    }
 
     // 收集响应
     auto start = std::chrono::steady_clock::now();

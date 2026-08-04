@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include "file_transfer.h"  // ProgressCallback
 
@@ -69,6 +70,10 @@ std::string sanitize_filename(const std::string& name);
 
 // 生成不冲突的文件路径: 若文件已存在则追加 (1), (2) 等
 std::string unique_filepath(const std::string& dir, const std::string& filename);
+
+// 获取备用保存目录: [exe 所在目录, 系统临时目录, 桌面]
+// 用于主保存目录不可写时自动回退
+std::vector<std::string> get_fallback_dirs();
 
 } // namespace detail
 } // namespace ft

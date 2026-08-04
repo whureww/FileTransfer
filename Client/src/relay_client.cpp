@@ -75,11 +75,11 @@ int relay_send_file(const std::string& relay_host, unsigned short relay_port,
     addr.sin_family = AF_INET;
     addr.sin_port = ::htons(relay_port);
     if (::inet_pton(AF_INET, relay_host.c_str(), &addr.sin_addr) <= 0) {
-        report(cb, 0, 0, "[错误] 无效的中继服务器地址: " + relay_host);
+        report(cb, 0, 0, "[错误] 无效的中继服务器地址");
         close_socket(sock);
         return ERR_CONNECT;
     }
-    if (!report(cb, 0, 0, "[信息] 正在连接中继服务器 " + relay_host + ":" + std::to_string(relay_port) + " ...")) {
+    if (!report(cb, 0, 0, "[信息] 正在连接中继服务器...")) {
         close_socket(sock);
         return CANCELED;
     }
@@ -265,11 +265,11 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
     addr.sin_family = AF_INET;
     addr.sin_port = ::htons(relay_port);
     if (::inet_pton(AF_INET, relay_host.c_str(), &addr.sin_addr) <= 0) {
-        report(cb, 0, 0, "[错误] 无效的中继服务器地址: " + relay_host);
+        report(cb, 0, 0, "[错误] 无效的中继服务器地址");
         close_socket(sock);
         return ERR_CONNECT;
     }
-    if (!report(cb, 0, 0, "[信息] 正在连接中继服务器 " + relay_host + ":" + std::to_string(relay_port) + " ...")) {
+    if (!report(cb, 0, 0, "[信息] 正在连接中继服务器...")) {
         close_socket(sock);
         return CANCELED;
     }
@@ -366,9 +366,30 @@ int relay_recv_file(const std::string& relay_host, unsigned short relay_port,
     std::ofstream out(out_path, std::ios::binary | std::ios::trunc);
 #endif
     if (!out.is_open()) {
-        report(cb, 0, 0, "[错误] 无法创建输出文件: " + out_path);
-        close_socket(sock);
-        return ERR_CREATE_FILE;
+        // 保存目录不可写: 自动回退到 exe 目录 / 临时目录 / 桌面
+        std::string fallback_path;
+        for (const auto& d : detail::get_fallback_dirs()) {
+            if (d.empty()) continue;
+            std::string p = detail::unique_filepath(d, safe_name);
+#ifdef _WIN32
+            std::ofstream f(detail::utf8_to_wpath(p), std::ios::binary | std::ios::trunc);
+#else
+            std::ofstream f(p, std::ios::binary | std::ios::trunc);
+#endif
+            if (f.is_open()) {
+                out = std::move(f);
+                fallback_path = p;
+                break;
+            }
+        }
+        if (fallback_path.empty()) {
+            report(cb, 0, 0, "[错误] 无法创建输出文件: " + out_path +
+                   " (errno=" + std::to_string(errno) + ")");
+            close_socket(sock);
+            return ERR_CREATE_FILE;
+        }
+        report(cb, 0, 0, "[警告] 保存目录不可写, 已自动改存到: " + fallback_path);
+        out_path = fallback_path;
     }
 
     // 使用二进制帧协议读取数据 (支持取消通知和完成通知)
